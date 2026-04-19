@@ -155,6 +155,22 @@ function Library:ApplyTextStroke(Inst)
     });
 end;
 
+-- Apply a subtle top→bottom transparency gradient to any Frame so the UI has
+-- depth instead of looking flat. `strength` is the bottom transparency (0-1),
+-- default 0.35 — higher values darken the bottom more.
+function Library:ApplyGradient(Inst, strength)
+    local s = strength or 0.35;
+    return Library:Create('UIGradient', {
+        Rotation = 90;
+        Color = ColorSequence.new(Color3.new(1, 1, 1));
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0);
+            NumberSequenceKeypoint.new(1, s);
+        });
+        Parent = Inst;
+    });
+end;
+
 function Library:CreateLabel(Properties, IsHud)
     local _Instance = Library:Create('TextLabel', {
         BackgroundTransparency = 1;
@@ -414,6 +430,12 @@ function Library:Unload()
      -- Call our unload callback, maybe to undo some hooks etc
     if Library.OnUnload then
         Library.OnUnload()
+    end
+
+    -- Clean up the menu blur so Lighting isn't left modified after unload.
+    if Library.MenuBlur then
+        pcall(Library.MenuBlur.Destroy, Library.MenuBlur)
+        Library.MenuBlur = nil
     end
 
     ScreenGui:Destroy()
@@ -1529,6 +1551,8 @@ do
                 BorderColor3 = 'OutlineColor';
             });
 
+            Library:ApplyGradient(Inner);
+
             Library:OnHighlight(Outer, Outer,
                 { BorderColor3 = 'AccentColor' },
                 { BorderColor3 = 'Black' }
@@ -1723,6 +1747,8 @@ do
             BackgroundColor3 = 'BackgroundColor';
             BorderColor3 = 'OutlineColor';
         });
+
+        Library:ApplyGradient(TextBoxInner);
 
         Library:OnHighlight(TextBoxOuter, TextBoxOuter,
             { BorderColor3 = 'AccentColor' },
@@ -2082,6 +2108,8 @@ do
             BorderColor3 = 'OutlineColor';
         });
 
+        Library:ApplyGradient(SliderInner, 0.25);
+
         local Fill = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
             BorderColor3 = Library.AccentColorDark;
@@ -2312,6 +2340,8 @@ do
             BackgroundColor3 = 'BackgroundColor';
             BorderColor3 = 'OutlineColor';
         });
+
+        Library:ApplyGradient(DropdownInner);
 
         local DropdownArrow = Library:CreateLabel({
             AnchorPoint = Vector2.new(0, 0.5);
@@ -3464,97 +3494,6 @@ function Library:ShowLoader(Config)
     local LoaderWidth = HasPatchnotes and 560 or 320;
     local PanelW = HasPatchnotes and 280 or 316;
 
-    -- ═══════════════════════════════════════════════════════════════════
-    -- Intro sequence: dark tint + camera blur + 3-line title fade.
-    -- Runs BEFORE the loader body appears so the user sees a clean cinematic
-    -- opening instead of an instant panel pop. Blocks the calling thread so
-    -- the existing loader flow remains untouched after this block finishes.
-    -- ═══════════════════════════════════════════════════════════════════
-    do
-        local IntroInfo = TweenInfo.new(1.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out);
-
-        local Tint = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BackgroundTransparency = 1;
-            BorderSizePixel = 0;
-            Size = UDim2.fromScale(1, 1);
-            ZIndex = 480;
-            Parent = ScreenGui;
-        });
-
-        -- Camera blur adds cinematic depth. pcall in case the game restricts
-        -- Lighting writes in some contexts; intro still works without it.
-        local Blur;
-        pcall(function()
-            Blur = Instance.new('BlurEffect');
-            Blur.Size = 0;
-            Blur.Parent = game:GetService('Lighting');
-        end);
-
-        local function mkIntroLabel(text, yOff, color, size, order)
-            local l = Library:CreateLabel({
-                Text = text;
-                TextColor3 = color;
-                TextSize = size;
-                TextTransparency = 1;
-                TextXAlignment = Enum.TextXAlignment.Center;
-                AnchorPoint = Vector2.new(0.5, 0.5);
-                Position = UDim2.new(0.5, 0, 0.5, yOff);
-                Size = UDim2.fromOffset(400, size + 6);
-                ZIndex = 481;
-                Parent = Tint;
-            });
-            -- Fade the UIStroke in sync so the text outline matches the body fade.
-            local stroke;
-            for _, c in ipairs(l:GetChildren()) do
-                if c:IsA('UIStroke') then stroke = c; stroke.Transparency = 1; break end;
-            end;
-            return { label = l, stroke = stroke, order = order };
-        end;
-
-        local introLabels = {
-            mkIntroLabel(Config.Title, -22, Color3.fromRGB(230, 230, 230), 16, 1),
-            mkIntroLabel(Config.ScriptName .. ' loaded', 0, Library.AccentColor, 13, 2),
-            mkIntroLabel('press ' .. (Config.IntroKey or 'RightShift') .. ' to show/hide menu', 22, Color3.fromRGB(120, 120, 120), 12, 3),
-        };
-
-        -- Fade in: tint + blur + labels staggered by 50ms per label (Atlanta-style reveal).
-        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 0.5 }):Play();
-        if Blur then
-            TweenService:Create(Blur, IntroInfo, { Size = 18 }):Play();
-        end;
-        for _, entry in ipairs(introLabels) do
-            task.delay((entry.order - 1) * 0.05, function()
-                TweenService:Create(entry.label, IntroInfo, { TextTransparency = 0 }):Play();
-                if entry.stroke then
-                    TweenService:Create(entry.stroke, IntroInfo, { Transparency = 0 }):Play();
-                end;
-            end);
-        end;
-
-        -- Hold + fade out. IntroDuration defaults to 1.8s on screen.
-        task.wait((Config.IntroDuration or 1.8) + 1.1);
-
-        for _, entry in ipairs(introLabels) do
-            TweenService:Create(entry.label, IntroInfo, { TextTransparency = 1 }):Play();
-            if entry.stroke then
-                TweenService:Create(entry.stroke, IntroInfo, { Transparency = 1 }):Play();
-            end;
-        end;
-        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 1 }):Play();
-        if Blur then
-            TweenService:Create(Blur, IntroInfo, { Size = 0 }):Play();
-        end;
-
-        task.delay(1.2, function()
-            pcall(Tint.Destroy, Tint);
-            if Blur then pcall(Blur.Destroy, Blur); end;
-        end);
-
-        -- Small overlap: let the loader body fade in while intro is still fading out.
-        task.wait(0.3);
-    end
-
     local LoaderGui = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0.5, 0.5);
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -3991,6 +3930,93 @@ function Library:ShowLoader(Config)
     -- Block the calling thread until Load is pressed + animation finishes
     ResumeEvent.Event:Wait();
     ResumeEvent:Destroy();
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Intro sequence: dark tint + camera blur + title fade.
+    -- Runs AFTER the loader finishes, BEFORE the UI callback creates the
+    -- window — so the user sees: progress bar → cinematic intro → UI opens.
+    -- ═══════════════════════════════════════════════════════════════════
+    do
+        local IntroInfo = TweenInfo.new(1.0, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out);
+
+        local Tint = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
+            Size = UDim2.fromScale(1, 1);
+            ZIndex = 480;
+            Parent = ScreenGui;
+        });
+
+        local Blur;
+        pcall(function()
+            Blur = Instance.new('BlurEffect');
+            Blur.Size = 0;
+            Blur.Parent = game:GetService('Lighting');
+        end);
+
+        local function mkIntroLabel(text, yOff, color, size, order)
+            local l = Library:CreateLabel({
+                Text = text;
+                TextColor3 = color;
+                TextSize = size;
+                TextTransparency = 1;
+                TextXAlignment = Enum.TextXAlignment.Center;
+                AnchorPoint = Vector2.new(0.5, 0.5);
+                Position = UDim2.new(0.5, 0, 0.5, yOff);
+                Size = UDim2.fromOffset(400, size + 6);
+                ZIndex = 481;
+                Parent = Tint;
+            });
+            local stroke;
+            for _, c in ipairs(l:GetChildren()) do
+                if c:IsA('UIStroke') then stroke = c; stroke.Transparency = 1; break end;
+            end;
+            return { label = l, stroke = stroke, order = order };
+        end;
+
+        local introLabels = {
+            mkIntroLabel(Config.Title, -22, Color3.fromRGB(230, 230, 230), 16, 1),
+            mkIntroLabel(Config.ScriptName .. ' loaded', 0, Library.AccentColor, 13, 2),
+            mkIntroLabel('press ' .. (Config.IntroKey or 'RightShift') .. ' to show/hide menu', 22, Color3.fromRGB(120, 120, 120), 12, 3),
+        };
+
+        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 0.55 }):Play();
+        if Blur then
+            TweenService:Create(Blur, IntroInfo, { Size = 22 }):Play();
+        end;
+        for _, entry in ipairs(introLabels) do
+            task.delay((entry.order - 1) * 0.08, function()
+                TweenService:Create(entry.label, IntroInfo, { TextTransparency = 0 }):Play();
+                if entry.stroke then
+                    TweenService:Create(entry.stroke, IntroInfo, { Transparency = 0 }):Play();
+                end;
+            end);
+        end;
+
+        -- Fade-in takes 1.0s, hold for IntroDuration (default 1.4s), fade-out 1.0s.
+        task.wait(1.0 + (Config.IntroDuration or 1.4));
+
+        for _, entry in ipairs(introLabels) do
+            TweenService:Create(entry.label, IntroInfo, { TextTransparency = 1 }):Play();
+            if entry.stroke then
+                TweenService:Create(entry.stroke, IntroInfo, { Transparency = 1 }):Play();
+            end;
+        end;
+        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 1 }):Play();
+        if Blur then
+            TweenService:Create(Blur, IntroInfo, { Size = 0 }):Play();
+        end;
+
+        task.delay(1.1, function()
+            pcall(Tint.Destroy, Tint);
+            if Blur then pcall(Blur.Destroy, Blur); end;
+        end);
+
+        -- Overlap intro fade-out with UI creation so the window fades in behind the dimming intro.
+        task.wait(0.35);
+    end
+
     Library:SafeCallback(Config.Callback);
 end;
 
@@ -4086,6 +4112,9 @@ function Library:CreateWindow(...)
     Library:AddToRegistry(Inner, {
         BackgroundColor3 = 'BackgroundColor';
     });
+
+    -- Overall menu body gradient: subtle top→bottom darken for depth.
+    Library:ApplyGradient(Inner, 0.15);
 
     -- Animated accent gradient line at the very top
     local TopAccent = Library:Create('Frame', {
@@ -4186,6 +4215,8 @@ function Library:CreateWindow(...)
     Library:AddToRegistry(TabBar, {
         BackgroundColor3 = 'MainColor';
     });
+
+    Library:ApplyGradient(TabBar, 0.3);
 
     -- Tab bar bottom separator
     Library:Create('Frame', {
@@ -4331,7 +4362,9 @@ function Library:CreateWindow(...)
             Parent = TabButton;
         });
 
-        -- Active tab underline indicator
+        -- Active tab underline: accent-colored bar with a transparency gradient
+        -- that fades outward on both sides (opaque in center → transparent at
+        -- the edges). Mirrors the reference screenshot's aesthetic.
         local TabUnderline = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
             BorderSizePixel = 0;
@@ -4344,6 +4377,19 @@ function Library:CreateWindow(...)
 
         Library:AddToRegistry(TabUnderline, {
             BackgroundColor3 = 'AccentColor';
+        });
+
+        -- Horizontal transparency ramp: edges=1 (invisible), center=0 (full accent).
+        -- Two symmetric ramps from both ends give the double-sided fade.
+        Library:Create('UIGradient', {
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.2, 0.4),
+                NumberSequenceKeypoint.new(0.5, 0),
+                NumberSequenceKeypoint.new(0.8, 0.4),
+                NumberSequenceKeypoint.new(1, 1),
+            });
+            Parent = TabUnderline;
         });
 
         -- Tab connector (covers separator line when active, creating seamless transition)
@@ -4504,7 +4550,9 @@ function Library:CreateWindow(...)
                 BackgroundColor3 = 'MainColor';
             });
 
-            -- Accent line at top of groupbox
+            Library:ApplyGradient(BoxInner, 0.2);
+
+            -- Accent line at top of groupbox with double-sided fade
             local BoxAccent = Library:Create('Frame', {
                 BackgroundColor3 = Library.AccentColor;
                 BorderSizePixel = 0;
@@ -4516,6 +4564,15 @@ function Library:CreateWindow(...)
 
             Library:AddToRegistry(BoxAccent, {
                 BackgroundColor3 = 'AccentColor';
+            });
+
+            Library:Create('UIGradient', {
+                Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.6),
+                    NumberSequenceKeypoint.new(0.5, 0),
+                    NumberSequenceKeypoint.new(1, 0.6),
+                });
+                Parent = BoxAccent;
             });
 
             local GroupboxLabel = Library:CreateLabel({
@@ -4627,7 +4684,9 @@ function Library:CreateWindow(...)
                 BackgroundColor3 = 'MainColor';
             });
 
-            -- Accent line at top of tabbox
+            Library:ApplyGradient(BoxInner, 0.2);
+
+            -- Accent line at top of tabbox with double-sided fade
             local TabboxAccent = Library:Create('Frame', {
                 BackgroundColor3 = Library.AccentColor;
                 BorderSizePixel = 0;
@@ -4639,6 +4698,15 @@ function Library:CreateWindow(...)
 
             Library:AddToRegistry(TabboxAccent, {
                 BackgroundColor3 = 'AccentColor';
+            });
+
+            Library:Create('UIGradient', {
+                Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.6),
+                    NumberSequenceKeypoint.new(0.5, 0),
+                    NumberSequenceKeypoint.new(1, 0.6),
+                });
+                Parent = TabboxAccent;
             });
 
             local TabboxButtons = Library:Create('Frame', {
@@ -4662,6 +4730,7 @@ function Library:CreateWindow(...)
                 local Button = Library:Create('Frame', {
                     BackgroundColor3 = Library.MainColor;
                     BorderColor3 = Color3.new(0, 0, 0);
+                    BorderSizePixel = 0;
                     Size = UDim2.new(0.5, 0, 1, 0);
                     ZIndex = 6;
                     Parent = TabboxButtons;
@@ -4671,13 +4740,52 @@ function Library:CreateWindow(...)
                     BackgroundColor3 = 'MainColor';
                 });
 
+                -- Vertical gradient on each tab button for depth.
+                local ButtonGradient = Library:Create('UIGradient', {
+                    Rotation = 90;
+                    Color = ColorSequence.new(Color3.new(1, 1, 1));
+                    Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0);
+                        NumberSequenceKeypoint.new(1, 0.35);
+                    });
+                    Parent = Button;
+                });
+
                 local ButtonLabel = Library:CreateLabel({
                     Size = UDim2.new(1, 0, 1, 0);
                     TextSize = 14;
                     Text = Name;
+                    TextColor3 = Color3.fromRGB(130, 130, 130);
                     TextXAlignment = Enum.TextXAlignment.Center;
                     ZIndex = 7;
                     Parent = Button;
+                });
+                Library:RemoveFromRegistry(ButtonLabel);
+                Library:AddToRegistry(ButtonLabel, {
+                    TextColor3 = Color3.fromRGB(130, 130, 130);
+                });
+
+                -- Double-sided-fade accent underline on the active tab.
+                local TabAccent = Library:Create('Frame', {
+                    BackgroundColor3 = Library.AccentColor;
+                    BorderSizePixel = 0;
+                    AnchorPoint = Vector2.new(0, 1);
+                    Position = UDim2.new(0, 0, 1, 0);
+                    Size = UDim2.new(1, 0, 0, 1);
+                    Visible = false;
+                    ZIndex = 10;
+                    Parent = Button;
+                });
+                Library:AddToRegistry(TabAccent, { BackgroundColor3 = 'AccentColor' });
+                Library:Create('UIGradient', {
+                    Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 1),
+                        NumberSequenceKeypoint.new(0.25, 0.5),
+                        NumberSequenceKeypoint.new(0.5, 0),
+                        NumberSequenceKeypoint.new(0.75, 0.5),
+                        NumberSequenceKeypoint.new(1, 1),
+                    });
+                    Parent = TabAccent;
                 });
 
                 local Block = Library:Create('Frame', {
@@ -4716,9 +4824,12 @@ function Library:CreateWindow(...)
 
                     Container.Visible = true;
                     Block.Visible = true;
+                    TabAccent.Visible = true;
 
                     Button.BackgroundColor3 = Library.BackgroundColor;
                     Library.RegistryMap[Button].Properties.BackgroundColor3 = 'BackgroundColor';
+                    ButtonLabel.TextColor3 = Color3.fromRGB(255, 255, 255);
+                    Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Color3.fromRGB(255, 255, 255);
 
                     Tab:Resize();
                 end;
@@ -4726,9 +4837,12 @@ function Library:CreateWindow(...)
                 function Tab:Hide()
                     Container.Visible = false;
                     Block.Visible = false;
+                    TabAccent.Visible = false;
 
                     Button.BackgroundColor3 = Library.MainColor;
                     Library.RegistryMap[Button].Properties.BackgroundColor3 = 'MainColor';
+                    ButtonLabel.TextColor3 = Color3.fromRGB(130, 130, 130);
+                    Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Color3.fromRGB(130, 130, 130);
                 end;
 
                 function Tab:Resize()
@@ -4823,6 +4937,20 @@ function Library:CreateWindow(...)
     local Toggled = false;
     local Fading = false;
 
+    -- Camera blur for the menu: one persistent BlurEffect that tweens between
+    -- 0 (closed) and a target size (open). Created lazily on first toggle so
+    -- unused menus don't touch Lighting. Stored on Library so :Unload cleans it.
+    local function ensureMenuBlur()
+        if Library.MenuBlur and Library.MenuBlur.Parent then return Library.MenuBlur end;
+        pcall(function()
+            local inst = Instance.new('BlurEffect');
+            inst.Size = 0;
+            inst.Parent = game:GetService('Lighting');
+            Library.MenuBlur = inst;
+        end);
+        return Library.MenuBlur;
+    end;
+
     function Library:Toggle()
         if Fading then
             return;
@@ -4833,6 +4961,14 @@ function Library:CreateWindow(...)
         Toggled = (not Toggled);
         Library.Toggled = Toggled;
         ModalElement.Modal = Toggled;
+
+        -- Blur tween — syncs with the frame fade. Size 12 when open, 0 when closed.
+        local Blur = ensureMenuBlur();
+        if Blur and Blur.Parent then
+            TweenService:Create(Blur, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad), {
+                Size = Toggled and 12 or 0;
+            }):Play();
+        end;
 
         -- Refresh PlaceholderBoxes: empty ones show while menu is open (so the
         -- user can grab and drag them into place) and hide again when closed.
