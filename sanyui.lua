@@ -3464,6 +3464,97 @@ function Library:ShowLoader(Config)
     local LoaderWidth = HasPatchnotes and 560 or 320;
     local PanelW = HasPatchnotes and 280 or 316;
 
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Intro sequence: dark tint + camera blur + 3-line title fade.
+    -- Runs BEFORE the loader body appears so the user sees a clean cinematic
+    -- opening instead of an instant panel pop. Blocks the calling thread so
+    -- the existing loader flow remains untouched after this block finishes.
+    -- ═══════════════════════════════════════════════════════════════════
+    do
+        local IntroInfo = TweenInfo.new(1.1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out);
+
+        local Tint = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
+            Size = UDim2.fromScale(1, 1);
+            ZIndex = 480;
+            Parent = ScreenGui;
+        });
+
+        -- Camera blur adds cinematic depth. pcall in case the game restricts
+        -- Lighting writes in some contexts; intro still works without it.
+        local Blur;
+        pcall(function()
+            Blur = Instance.new('BlurEffect');
+            Blur.Size = 0;
+            Blur.Parent = game:GetService('Lighting');
+        end);
+
+        local function mkIntroLabel(text, yOff, color, size, order)
+            local l = Library:CreateLabel({
+                Text = text;
+                TextColor3 = color;
+                TextSize = size;
+                TextTransparency = 1;
+                TextXAlignment = Enum.TextXAlignment.Center;
+                AnchorPoint = Vector2.new(0.5, 0.5);
+                Position = UDim2.new(0.5, 0, 0.5, yOff);
+                Size = UDim2.fromOffset(400, size + 6);
+                ZIndex = 481;
+                Parent = Tint;
+            });
+            -- Fade the UIStroke in sync so the text outline matches the body fade.
+            local stroke;
+            for _, c in ipairs(l:GetChildren()) do
+                if c:IsA('UIStroke') then stroke = c; stroke.Transparency = 1; break end;
+            end;
+            return { label = l, stroke = stroke, order = order };
+        end;
+
+        local introLabels = {
+            mkIntroLabel(Config.Title, -22, Color3.fromRGB(230, 230, 230), 16, 1),
+            mkIntroLabel(Config.ScriptName .. ' loaded', 0, Library.AccentColor, 13, 2),
+            mkIntroLabel('press ' .. (Config.IntroKey or 'RightShift') .. ' to show/hide menu', 22, Color3.fromRGB(120, 120, 120), 12, 3),
+        };
+
+        -- Fade in: tint + blur + labels staggered by 50ms per label (Atlanta-style reveal).
+        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 0.5 }):Play();
+        if Blur then
+            TweenService:Create(Blur, IntroInfo, { Size = 18 }):Play();
+        end;
+        for _, entry in ipairs(introLabels) do
+            task.delay((entry.order - 1) * 0.05, function()
+                TweenService:Create(entry.label, IntroInfo, { TextTransparency = 0 }):Play();
+                if entry.stroke then
+                    TweenService:Create(entry.stroke, IntroInfo, { Transparency = 0 }):Play();
+                end;
+            end);
+        end;
+
+        -- Hold + fade out. IntroDuration defaults to 1.8s on screen.
+        task.wait((Config.IntroDuration or 1.8) + 1.1);
+
+        for _, entry in ipairs(introLabels) do
+            TweenService:Create(entry.label, IntroInfo, { TextTransparency = 1 }):Play();
+            if entry.stroke then
+                TweenService:Create(entry.stroke, IntroInfo, { Transparency = 1 }):Play();
+            end;
+        end;
+        TweenService:Create(Tint, IntroInfo, { BackgroundTransparency = 1 }):Play();
+        if Blur then
+            TweenService:Create(Blur, IntroInfo, { Size = 0 }):Play();
+        end;
+
+        task.delay(1.2, function()
+            pcall(Tint.Destroy, Tint);
+            if Blur then pcall(Blur.Destroy, Blur); end;
+        end);
+
+        -- Small overlap: let the loader body fade in while intro is still fading out.
+        task.wait(0.3);
+    end
+
     local LoaderGui = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0.5, 0.5);
         BackgroundColor3 = Color3.new(0, 0, 0);
