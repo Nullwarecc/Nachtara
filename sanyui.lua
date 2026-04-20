@@ -4231,13 +4231,22 @@ function Library:CreateWindow(...)
         Tabs = {};
     };
 
-    local Outer = Library:Create('Frame', {
+    -- CanvasGroup (instead of plain Frame): flattens all children into a single
+    -- render surface so fading the entire menu = one `GroupTransparency` tween
+    -- instead of creating 1000+ per-descendant tweens. Before this, every
+    -- open/close spiked the frame because TweenService had to allocate a Tween
+    -- instance per descendant (Frames, Labels, Strokes, Gradients — easily
+    -- 1500+ on a full menu). Also makes dragging cheaper because Roblox
+    -- batches children's absolute-position recompute through the canvas.
+    local Outer = Library:Create('CanvasGroup', {
         AnchorPoint = Config.AnchorPoint,
         BackgroundColor3 = Color3.new(0, 0, 0);
         BorderSizePixel = 0;
         Position = Config.Position,
         Size = Config.Size,
         Visible = false;
+        ClipsDescendants = false; -- glow layers sit outside the frame
+        GroupTransparency = 1;    -- start invisible; first Toggle fades in
         ZIndex = 1;
         Parent = ScreenGui;
     });
@@ -5215,39 +5224,15 @@ function Library:CreateWindow(...)
             end);
         end;
 
-        for _, Desc in next, Outer:GetDescendants() do
-            local Properties = {};
-
-            if Desc:IsA('ImageLabel') then
-                table.insert(Properties, 'ImageTransparency');
-                table.insert(Properties, 'BackgroundTransparency');
-            elseif Desc:IsA('TextLabel') or Desc:IsA('TextBox') then
-                table.insert(Properties, 'TextTransparency');
-            elseif Desc:IsA('Frame') or Desc:IsA('ScrollingFrame') then
-                table.insert(Properties, 'BackgroundTransparency');
-            elseif Desc:IsA('UIStroke') then
-                table.insert(Properties, 'Transparency');
-            end;
-
-            local Cache = TransparencyCache[Desc];
-
-            if (not Cache) then
-                Cache = {};
-                TransparencyCache[Desc] = Cache;
-            end;
-
-            for _, Prop in next, Properties do
-                if not Cache[Prop] then
-                    Cache[Prop] = Desc[Prop];
-                end;
-
-                if Cache[Prop] == 1 then
-                    continue;
-                end;
-
-                TweenService:Create(Desc, TweenInfo.new(FadeTime, Enum.EasingStyle.Linear), { [Prop] = Toggled and Cache[Prop] or 1 }):Play();
-            end;
-        end;
+        -- Single tween on the CanvasGroup's GroupTransparency fades the
+        -- entire menu atomically. Replaces the old per-descendant tween
+        -- loop which allocated 1000+ Tween instances per toggle and spiked
+        -- the frame.
+        TweenService:Create(
+            Outer,
+            TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { GroupTransparency = Toggled and 0 or 1 }
+        ):Play();
 
         task.wait(FadeTime);
 
