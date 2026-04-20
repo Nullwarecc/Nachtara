@@ -29,7 +29,8 @@ local TweenService = game:GetService('TweenService')
 local ESPPreview = {}
 ESPPreview.Library = nil
 ESPPreview.Bound   = {}
-ESPPreview._visible = false
+ESPPreview._wantsVisible = false   -- user is on a bound tab
+ESPPreview._visible = false        -- actual window state
 
 -- Fake values used to fill the info labels. Users can override via SetFakeData.
 ESPPreview.FakeData = {
@@ -42,17 +43,20 @@ ESPPreview.FakeData = {
 
 local ESP_INFO_TYPES = { 'Name', 'Distance', 'MovementState', 'HeldWeapon', 'Teams' }
 
--- Pre-computed box scale fractions matching the billboard at ~15 studs (FOV 70).
--- These mirror updateESP's bx/by/bw/bh math for one specific distance so the
--- 2D preview's proportions match the 3D version the user sees in-game.
-local PREVIEW_BX = 0.195
-local PREVIEW_BY = 0.051
-local PREVIEW_BW = 0.610
-local PREVIEW_BH = 0.899
-local PREVIEW_SIZE_X = 250
-local PREVIEW_SIZE_Y = 260
-local MARGIN_X = 48   -- matches (PREVIEW_BX * PREVIEW_SIZE_X) roughly
-local MARGIN_Y = 13
+-- Inner box (the "character" region). Fixed base dimensions so the box always
+-- renders at the same visible size regardless of which labels are enabled.
+local BOX_W = 90
+local BOX_H = 150
+
+-- Default padding on each side when no labels are placed there. Small gap so
+-- the box isn't flush against the panel edge.
+local EDGE_PAD = 8
+-- Extra gap between the box edge and a label sitting on that edge.
+local LABEL_PAD = 6
+
+-- Window chrome sizes.
+local TITLE_H = 25   -- title bar + separator
+local WIN_PAD = 8    -- pad around PreviewRoot inside the window Inner
 
 local HB_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
@@ -72,16 +76,35 @@ local function buildWindow(self)
     assert(Library, 'ESPPreview: SetLibrary must be called before use')
 
     -- Root: draggable dark panel with a titlebar + preview content area.
+    -- Initial size is a ballpark; the update loop resizes it to fit labels.
+    local initW = BOX_W + 2 * (EDGE_PAD + 30) + 2 * WIN_PAD
+    local initH = BOX_H + 2 * (EDGE_PAD + 10) + TITLE_H + WIN_PAD * 2
     local Outer = Instance.new('Frame')
     Outer.Name = 'ESPPreview'
     Outer.AnchorPoint = Vector2.new(0, 0)
-    Outer.Position = UDim2.new(1, -PREVIEW_SIZE_X - 60, 0, 80)
-    Outer.Size = UDim2.fromOffset(PREVIEW_SIZE_X + 20, PREVIEW_SIZE_Y + 40)
+    Outer.Position = UDim2.new(1, -initW - 60, 0, 80)
+    Outer.Size = UDim2.fromOffset(initW, initH)
     Outer.BackgroundColor3 = Color3.new(0, 0, 0)
     Outer.BorderSizePixel = 0
     Outer.ZIndex = 40
     Outer.Visible = false
     Outer.Parent = Library.ScreenGui
+
+    -- Accent glow: 6 concentric Frames growing outward with rising
+    -- transparency. Same manual box-shadow technique used on the main Window
+    -- and Watermark — Roblox has no native shadow on Frames.
+    for i = 1, 6 do
+        local g = Instance.new('Frame')
+        g.Name = 'Glow' .. i
+        g.BackgroundColor3 = Library.AccentColor
+        g.BackgroundTransparency = 0.5 + i * 0.08
+        g.BorderSizePixel = 0
+        g.Position = UDim2.new(0, -i, 0, -i)
+        g.Size = UDim2.new(1, i * 2, 1, i * 2)
+        g.ZIndex = 39
+        g.Parent = Outer
+        Library:AddToRegistry(g, { BackgroundColor3 = 'AccentColor' })
+    end
 
     local Border = Instance.new('Frame')
     Border.Position = UDim2.new(0, 1, 0, 1)
@@ -137,12 +160,12 @@ local function buildWindow(self)
     Sep.Parent = Inner
     Library:AddToRegistry(Sep, { BackgroundColor3 = 'OutlineColor' })
 
-    -- Preview root: matches billboard size in 2D space.
+    -- Preview root. Sized dynamically in updatePreview to wrap box + labels.
     local PreviewRoot = Instance.new('Frame')
     PreviewRoot.Name = 'PreviewRoot'
-    PreviewRoot.Position = UDim2.new(0.5, 0, 0, 25)
     PreviewRoot.AnchorPoint = Vector2.new(0.5, 0)
-    PreviewRoot.Size = UDim2.fromOffset(PREVIEW_SIZE_X, PREVIEW_SIZE_Y)
+    PreviewRoot.Position = UDim2.new(0.5, 0, 0, TITLE_H)
+    PreviewRoot.Size = UDim2.fromOffset(initW - 2 * WIN_PAD, initH - TITLE_H - WIN_PAD)
     PreviewRoot.BackgroundTransparency = 1
     PreviewRoot.ClipsDescendants = false
     PreviewRoot.ZIndex = 44
@@ -256,27 +279,97 @@ end
 -- so the preview advances even when the main ESP loop is idle (no players).
 local boxRot, fillRot = 0, 0
 
-local function getInfoText(fakeData, it)
-    return fakeData[it] or ''
+-- Collect per-position label content up-front. Returned table has
+-- { text, color, size } per position for the main update to apply AND the
+-- resize math to measure required space.
+local function collectLabelsToDraw(fakeData)
+    local out = {
+        Top   = { text = '', color = nil, size = 12 },
+        Right = { text = '', color = nil, size = 12 },
+        Left  = { text = '', color = nil, size = 12 },
+        Down  = { text = '', color = nil, size = 12 },
+    }
+    for _, it in ESP_INFO_TYPES do
+        local tn = 'ESP' .. it
+        if Toggles[tn] and Toggles[tn].Value then
+            local p = Options['ESP' .. it .. 'Pos'] and Options['ESP' .. it .. 'Pos'].Value or 'Top'
+            local t = fakeData[it] or ''
+            if t ~= '' then
+                local entry = out[p]
+                if entry then
+                    local c = Options['ESP' .. it .. 'Color'] and Options['ESP' .. it .. 'Color'].Value or Color3.new(1, 1, 1)
+                    local s = Options['ESP' .. it .. 'Size']  and Options['ESP' .. it .. 'Size'].Value  or 12
+                    local sep = (p == 'Top' or p == 'Down') and ' | ' or '\n'
+                    entry.text  = entry.text == '' and t or (entry.text .. sep .. t)
+                    entry.color = entry.color or c
+                    entry.size  = s
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Measure pixel bounds the text will take. Returns (width, height) in pixels.
+local function measureText(text, size, font)
+    if not text or text == '' then return 0, 0 end
+    local b = game:GetService('TextService'):GetTextSize(
+        text, size, font, Vector2.new(math.huge, math.huge)
+    )
+    return b.X, b.Y
 end
 
 -- Live update of the preview box. Reads the same Options/Toggles the real
--- updateESP reads. Fixed "virtual distance" = pre-computed bx/by/bw/bh above.
-local function updatePreview(refs, fakeData, dt)
-    local bx, by, bw, bh = PREVIEW_BX, PREVIEW_BY, PREVIEW_BW, PREVIEW_BH
+-- updateESP reads. Resizes Outer + PreviewRoot each frame to wrap the
+-- box + whatever labels are currently enabled.
+local function updatePreview(win, refs, fakeData, dt)
+    local labels = collectLabelsToDraw(fakeData)
+    local font = Font.fromEnum(Enum.Font.Code)
 
-    -- Size / position the box layers + label anchors.
+    -- Measure how much room each edge needs.
+    local topW,  topH  = measureText(labels.Top.text,   labels.Top.size,  font)
+    local downW, downH = measureText(labels.Down.text,  labels.Down.size, font)
+    local leftW, leftH = measureText(labels.Left.text,  labels.Left.size, font)
+    local rightW,rightH= measureText(labels.Right.text, labels.Right.size,font)
+
+    local marginT = (labels.Top.text  ~= '' and (topH + LABEL_PAD))  or EDGE_PAD
+    local marginB = (labels.Down.text ~= '' and (downH + LABEL_PAD)) or EDGE_PAD
+    local marginL = (labels.Left.text ~= '' and (leftW + LABEL_PAD)) or EDGE_PAD
+    local marginR = (labels.Right.text~= '' and (rightW + LABEL_PAD))or EDGE_PAD
+
+    -- Horizontal label text width also bounds the min preview width (so
+    -- top/bottom labels aren't truncated when they're wider than the box).
+    local minBoxW = math.max(BOX_W, topW, downW)
+
+    local totalW = marginL + minBoxW + marginR
+    local totalH = marginT + BOX_H  + marginB
+
+    -- Resize the PreviewRoot + window Outer to wrap everything cleanly.
+    win.previewRoot.Size = UDim2.fromOffset(totalW, totalH)
+    local winW = totalW + 2 * WIN_PAD
+    local winH = totalH + TITLE_H + WIN_PAD
+    if win.outer.Size.X.Offset ~= winW or win.outer.Size.Y.Offset ~= winH then
+        win.outer.Size = UDim2.fromOffset(winW, winH)
+    end
+
+    -- Compute scale fractions of the box region inside the preview root.
+    local bx = marginL / totalW
+    local by = marginT / totalH
+    local bw = minBoxW / totalW
+    local bh = BOX_H   / totalH
+
+    -- Size / position the box layers + label anchors (same math as the
+    -- real updateESP, just driven by our dynamic bx/by/bw/bh).
     refs.outerBox.Position = UDim2.new(bx, -1, by, -1); refs.outerBox.Size = UDim2.new(bw, 2, bh, 2)
     refs.fillBox.Position  = UDim2.new(bx, 0, by, 0);   refs.fillBox.Size  = UDim2.new(bw, 0, bh, 0)
     refs.innerBox.Position = UDim2.new(bx, 1, by, 1);   refs.innerBox.Size = UDim2.new(bw, -2, bh, -2)
 
-    refs.labels.Top.Position   = UDim2.new(bx, 0, 0, 0);            refs.labels.Top.Size   = UDim2.new(bw, 0, 0, MARGIN_Y - 4)
-    refs.labels.Down.Position  = UDim2.new(bx, 0, by + bh, 4);      refs.labels.Down.Size  = UDim2.new(bw, 0, 0, MARGIN_Y - 4)
-    refs.labels.Right.Position = UDim2.new(bx + bw, 4, by, 0);      refs.labels.Right.Size = UDim2.new(0, MARGIN_X - 4, bh, 0)
-    refs.labels.Left.Position  = UDim2.new(bx, -MARGIN_X, by, 0);   refs.labels.Left.Size  = UDim2.new(0, MARGIN_X - 4, bh, 0)
+    refs.labels.Top.Position   = UDim2.new(bx, 0, 0, 0);                 refs.labels.Top.Size   = UDim2.new(bw, 0, 0, marginT - 2)
+    refs.labels.Down.Position  = UDim2.new(bx, 0, by + bh, 2);           refs.labels.Down.Size  = UDim2.new(bw, 0, 0, marginB - 2)
+    refs.labels.Right.Position = UDim2.new(bx + bw, 2, by, 0);           refs.labels.Right.Size = UDim2.new(0, marginR - 2, bh, 0)
+    refs.labels.Left.Position  = UDim2.new(bx, -(marginL - 2), by, 0);   refs.labels.Left.Size  = UDim2.new(0, marginL - 2, bh, 0)
 
-    -- Fake HP fraction so healthbars don't appear full-size. Slowly oscillate
-    -- so the user sees the bar draw/color reflect mid-HP state.
+    -- Fake HP fraction so healthbars don't appear full-size.
     local hpFrac = 0.68
 
     -- Box layers ---------------------------------------------------------
@@ -380,58 +473,64 @@ local function updatePreview(refs, fakeData, dt)
         end
     end
 
-    -- Labels -------------------------------------------------------------
-    for _, lbl in refs.labels do lbl.Text = ''; lbl.Visible = false end
-    local topTxt, rightTxt, leftTxt, downTxt = '', '', '', ''
-    local topColor, rightColor, leftColor, downColor = nil, nil, nil, nil
-    local topSize, rightSize, leftSize, downSize = 12, 12, 12, 12
-    for _, it in ESP_INFO_TYPES do
-        local tn = 'ESP' .. it
-        if Toggles[tn] and Toggles[tn].Value then
-            local p = Options['ESP' .. it .. 'Pos'] and Options['ESP' .. it .. 'Pos'].Value or 'Top'
-            local t = getInfoText(fakeData, it)
-            if t ~= '' then
-                local c = Options['ESP' .. it .. 'Color'] and Options['ESP' .. it .. 'Color'].Value or Color3.new(1, 1, 1)
-                local s = Options['ESP' .. it .. 'Size']  and Options['ESP' .. it .. 'Size'].Value  or 12
-                local sep = (p == 'Top' or p == 'Down') and ' | ' or '\n'
-                if p == 'Top' then
-                    topTxt = topTxt == '' and t or (topTxt .. sep .. t); topColor = topColor or c; topSize = s
-                elseif p == 'Right' then
-                    rightTxt = rightTxt == '' and t or (rightTxt .. sep .. t); rightColor = rightColor or c; rightSize = s
-                elseif p == 'Left' then
-                    leftTxt = leftTxt == '' and t or (leftTxt .. sep .. t); leftColor = leftColor or c; leftSize = s
-                elseif p == 'Down' then
-                    downTxt = downTxt == '' and t or (downTxt .. sep .. t); downColor = downColor or c; downSize = s
-                end
-            end
+    -- Labels: already collected up-front. Apply text/color/size to each
+    -- position; hide positions without content.
+    for pos, lbl in refs.labels do
+        local entry = labels[pos]
+        if entry and entry.text ~= '' then
+            lbl.Text = entry.text
+            lbl.TextColor3 = entry.color or Color3.new(1, 1, 1)
+            lbl.TextSize = entry.size or 12
+            lbl.Visible = true
+        else
+            lbl.Text = ''
+            lbl.Visible = false
         end
     end
-    local function setLbl(lbl, txt, col, sz)
-        if txt ~= '' then lbl.TextColor3 = col; lbl.TextSize = sz; lbl.Text = txt; lbl.Visible = true end
-    end
-    setLbl(refs.labels.Top,   topTxt,   topColor,   topSize)
-    setLbl(refs.labels.Right, rightTxt, rightColor, rightSize)
-    setLbl(refs.labels.Left,  leftTxt,  leftColor,  leftSize)
-    setLbl(refs.labels.Down,  downTxt,  downColor,  downSize)
 end
 
 -- ───────── Visibility lifecycle ─────────
 
+-- Effective visibility combines:
+--   _wantsVisible — user is on a bound tab (managed by BindTabs)
+--   menu open     — library-level toggle state
+-- The window renders ONLY when both are true. Missing either one hides it.
+local function applyVisibility(self)
+    if not self._built or not self._window then return end
+    local menuOpen = self.Library and self.Library.Toggled ~= false
+    local show = self._wantsVisible and menuOpen
+    self._visible = show
+    self._window.Visible = show
+end
+
 local function ensureBuilt(self)
     if self._built then return end
     local outer, previewRoot = buildWindow(self)
+    self._win = { outer = outer, previewRoot = previewRoot }
     self._window = outer
     self._previewRoot = previewRoot
     self._refs = buildESPBox(previewRoot, self.Library:GetActiveFont())
     self._built = true
 
-    -- Per-frame preview update while visible.
+    -- Per-frame preview update while visible. Registered with the library's
+    -- signal list so :Unload cleans it up automatically.
     self._conn = RunService.RenderStepped:Connect(function(dt)
         if not self._visible or not self._window or not self._window.Parent then return end
-        -- Allow Toggles to not yet exist (e.g. before main.lua ESP UI is built).
         if not Toggles or not Options then return end
-        updatePreview(self._refs, self.FakeData, dt)
+        updatePreview(self._win, self._refs, self.FakeData, dt)
     end)
+    self.Library:GiveSignal(self._conn)
+
+    -- Close-on-menu-close: watch Library.Toggled. Missing Heartbeat gate keeps
+    -- the check lightweight (bool compare) and avoids piling work on RenderStepped.
+    self._toggleConn = RunService.Heartbeat:Connect(function()
+        local menuOpen = self.Library and self.Library.Toggled ~= false
+        local shouldShow = self._wantsVisible and menuOpen
+        if shouldShow ~= self._visible then
+            applyVisibility(self)
+        end
+    end)
+    self.Library:GiveSignal(self._toggleConn)
 
     -- Keep fonts in sync with library-wide font selection.
     self.Library:OnFontChanged(function(face)
@@ -444,17 +543,17 @@ end
 
 function ESPPreview:Show()
     ensureBuilt(self)
-    self._visible = true
-    self._window.Visible = true
+    self._wantsVisible = true
+    applyVisibility(self)
 end
 
 function ESPPreview:Hide()
-    self._visible = false
-    if self._window then self._window.Visible = false end
+    self._wantsVisible = false
+    applyVisibility(self)
 end
 
 function ESPPreview:Toggle()
-    if self._visible then self:Hide() else self:Show() end
+    if self._wantsVisible then self:Hide() else self:Show() end
 end
 
 -- Attach the preview to a Window: walks every tab and wraps its ShowTab so

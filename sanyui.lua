@@ -340,19 +340,19 @@ do
     end));
 end;
 
--- Clean drag implementation using Input.Position (screen coordinates, no
--- GuiInset offset issues). Handles mouse + touch. Drag end is tied to the
--- SPECIFIC input that started the drag via Input.Changed, so simultaneous
--- draggables don't interfere with each other.
+-- Clean drag implementation. Uses the GLOBAL UserInputService.InputChanged
+-- for move events rather than Frame.InputChanged — the per-instance signal
+-- stops firing the moment the cursor leaves the frame during a fast drag,
+-- which produced the visible lag / stuttering.
+--
+-- Drag end is bound to the specific MouseButton1/Touch Input that started
+-- the drag (via input.Changed on UserInputState), so simultaneous draggable
+-- windows don't cancel each other.
 --
 -- `Cutoff` is the pixel distance from the frame's top where clicks still
--- initiate a drag (used so a title bar is draggable but body widgets aren't).
+-- initiate a drag (title bars are draggable, body widgets aren't).
 function Library:MakeDraggable(Frame, Cutoff)
     Frame.Active = true;
-
-    local dragging = false;
-    local dragStart;   -- Vector3 from Input.Position
-    local startPos;    -- UDim2 frame position at drag-start
 
     Frame.InputBegan:Connect(function(Input)
         if Input.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -371,32 +371,32 @@ function Library:MakeDraggable(Frame, Cutoff)
             Frame.Position = UDim2.fromOffset(absPos.X, absPos.Y);
         end;
 
-        dragging = true;
-        dragStart = Input.Position;
-        startPos = Frame.Position;
+        local dragStart = Input.Position;
+        local startPos  = Frame.Position;
+        local moveConn;
 
-        -- Tie end-of-drag to THIS input so another widget's mouse-up doesn't
-        -- cancel our drag, and so touch + mouse coexist cleanly.
-        local changedConn;
-        changedConn = Input.Changed:Connect(function()
+        moveConn = InputService.InputChanged:Connect(function(moveInput)
+            if moveInput.UserInputType ~= Enum.UserInputType.MouseMovement
+                and moveInput.UserInputType ~= Enum.UserInputType.Touch then
+                return;
+            end;
+            -- For touch, dragStart and moveInput share the same Input instance;
+            -- for mouse, MouseMovement carries the live cursor position. In
+            -- both cases `moveInput.Position - dragStart` gives the pixel delta.
+            local delta = moveInput.Position - dragStart;
+            Frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            );
+        end);
+
+        local endConn;
+        endConn = Input.Changed:Connect(function()
             if Input.UserInputState == Enum.UserInputState.End then
-                dragging = false;
-                if changedConn then changedConn:Disconnect(); changedConn = nil end;
+                if moveConn then moveConn:Disconnect() end;
+                if endConn then endConn:Disconnect() end;
             end;
         end);
-    end);
-
-    Frame.InputChanged:Connect(function(Input)
-        if not dragging then return end;
-        if Input.UserInputType ~= Enum.UserInputType.MouseMovement
-            and Input.UserInputType ~= Enum.UserInputType.Touch then
-            return;
-        end;
-        local delta = Input.Position - dragStart;
-        Frame.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y
-        );
     end);
 end;
 
