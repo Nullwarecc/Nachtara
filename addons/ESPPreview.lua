@@ -344,12 +344,12 @@ local function updatePreview(win, refs, fakeData, dt)
     local marginL = (labels.Left.text ~= '' and (leftW + LABEL_PAD)) or EDGE_PAD
     local marginR = (labels.Right.text~= '' and (rightW + LABEL_PAD))or EDGE_PAD
 
-    -- Horizontal label text width also bounds the min preview width (so
-    -- top/bottom labels aren't truncated when they're wider than the box).
-    local minBoxW = math.max(BOX_W, topW, downW)
-
-    local totalW = marginL + minBoxW + marginR
-    local totalH = marginT + BOX_H  + marginB
+    -- Box width stays FIXED regardless of Top/Down label content. This matches
+    -- the in-game billboard — Top/Down labels are sized `1*bw` wide and clip
+    -- if the text exceeds that width; they never widen the box itself. Only
+    -- side labels (Left/Right) push the margins outward.
+    local totalW = marginL + BOX_W + marginR
+    local totalH = marginT + BOX_H + marginB
 
     -- Resize the PreviewRoot + window Outer to wrap everything cleanly.
     win.previewRoot.Size = UDim2.fromOffset(totalW, totalH)
@@ -362,7 +362,7 @@ local function updatePreview(win, refs, fakeData, dt)
     -- Compute scale fractions of the box region inside the preview root.
     local bx = marginL / totalW
     local by = marginT / totalH
-    local bw = minBoxW / totalW
+    local bw = BOX_W   / totalW
     local bh = BOX_H   / totalH
 
     -- Size / position the box layers + label anchors (same math as the

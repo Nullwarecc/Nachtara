@@ -340,19 +340,60 @@ do
     end));
 end;
 
--- Clean drag implementation. Uses the GLOBAL UserInputService.InputChanged
--- for move events rather than Frame.InputChanged — the per-instance signal
--- stops firing the moment the cursor leaves the frame during a fast drag,
--- which produced the visible lag / stuttering.
+-- Registry of every draggable frame. Each entry is { frame = … }. Used by
+-- the drag logic for inter-window collision so two menu panels can't overlap.
+Library.Draggables = {};
+
+-- Clean drag implementation.
 --
--- Drag end is bound to the specific MouseButton1/Touch Input that started
--- the drag (via input.Changed on UserInputState), so simultaneous draggable
--- windows don't cancel each other.
+-- 1. MouseMovement goes through UserInputService.InputChanged (global) — the
+--    frame-local signal stops firing as soon as the cursor leaves the frame
+--    during fast drags.
+-- 2. Position writes are COALESCED: InputChanged only stashes the latest
+--    target offset, a single RenderStepped applies it once per frame. The
+--    main menu has 1500+ descendants and Roblox recomputes absolute
+--    positions for all of them on every parent Position write — multiple
+--    writes per frame (mouse samples ~200 Hz) were the actual lag source.
+-- 3. Other registered draggables are collision-checked each frame so menu
+--    windows can't overlap — they snap to the nearest edge.
 --
--- `Cutoff` is the pixel distance from the frame's top where clicks still
--- initiate a drag (title bars are draggable, body widgets aren't).
+-- End-of-drag is tied to the originating Input.Changed so simultaneous
+-- draggables don't cancel each other.
 function Library:MakeDraggable(Frame, Cutoff)
     Frame.Active = true;
+
+    local entry = { frame = Frame };
+    table.insert(Library.Draggables, entry);
+
+    -- AABB collision snap against every other registered, visible draggable.
+    local function resolveCollision(x, y)
+        local size = Frame.AbsoluteSize;
+        local w, h = size.X, size.Y;
+        for _, other in ipairs(Library.Draggables) do
+            if other ~= entry and other.frame and other.frame.Parent and other.frame.Visible then
+                local oPos = other.frame.AbsolutePosition;
+                local oSize = other.frame.AbsoluteSize;
+                if x < oPos.X + oSize.X and x + w > oPos.X
+                    and y < oPos.Y + oSize.Y and y + h > oPos.Y then
+                    -- Overlap. Pick the axis with the smallest required push.
+                    local pushL = oPos.X - w - x;           -- push us left
+                    local pushR = oPos.X + oSize.X - x;     -- push us right
+                    local pushU = oPos.Y - h - y;           -- push us up
+                    local pushD = oPos.Y + oSize.Y - y;     -- push us down
+                    local aL, aR = math.abs(pushL), math.abs(pushR);
+                    local aU, aD = math.abs(pushU), math.abs(pushD);
+                    local minX = math.min(aL, aR);
+                    local minY = math.min(aU, aD);
+                    if minX < minY then
+                        x = x + (aL < aR and pushL or pushR);
+                    else
+                        y = y + (aU < aD and pushU or pushD);
+                    end;
+                end;
+            end;
+        end;
+        return x, y;
+    end;
 
     Frame.InputBegan:Connect(function(Input)
         if Input.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -363,8 +404,6 @@ function Library:MakeDraggable(Frame, Cutoff)
         local relY = Input.Position.Y - Frame.AbsolutePosition.Y;
         if relY > (Cutoff or 40) then return end;
 
-        -- Normalize the anchor on first drag so subsequent position writes
-        -- don't jump. Preserves the visible screen position during the swap.
         if Frame.AnchorPoint ~= Vector2.new(0, 0) then
             local absPos = Frame.AbsolutePosition;
             Frame.AnchorPoint = Vector2.new(0, 0);
@@ -373,27 +412,34 @@ function Library:MakeDraggable(Frame, Cutoff)
 
         local dragStart = Input.Position;
         local startPos  = Frame.Position;
-        local moveConn;
+        local pendingX, pendingY = startPos.X.Offset, startPos.Y.Offset;
+        local dirty = false;
+
+        local moveConn, renderConn, endConn;
 
         moveConn = InputService.InputChanged:Connect(function(moveInput)
             if moveInput.UserInputType ~= Enum.UserInputType.MouseMovement
                 and moveInput.UserInputType ~= Enum.UserInputType.Touch then
                 return;
             end;
-            -- For touch, dragStart and moveInput share the same Input instance;
-            -- for mouse, MouseMovement carries the live cursor position. In
-            -- both cases `moveInput.Position - dragStart` gives the pixel delta.
+            -- Stash the target; the per-frame handler writes Position.
             local delta = moveInput.Position - dragStart;
-            Frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            );
+            pendingX = startPos.X.Offset + delta.X;
+            pendingY = startPos.Y.Offset + delta.Y;
+            dirty = true;
         end);
 
-        local endConn;
+        renderConn = RunService.RenderStepped:Connect(function()
+            if not dirty then return end;
+            dirty = false;
+            local x, y = resolveCollision(pendingX, pendingY);
+            Frame.Position = UDim2.new(startPos.X.Scale, x, startPos.Y.Scale, y);
+        end);
+
         endConn = Input.Changed:Connect(function()
             if Input.UserInputState == Enum.UserInputState.End then
                 if moveConn then moveConn:Disconnect() end;
+                if renderConn then renderConn:Disconnect() end;
                 if endConn then endConn:Disconnect() end;
             end;
         end);
@@ -458,30 +504,35 @@ function Library:AddToolTip(InfoStr, HoverInstance)
     end)
 end
 
+-- Atlanta-style smooth hover. Instead of instant color swap, color properties
+-- tween toward their hover/rest targets via TweenService. The registry is
+-- updated with the symbolic color name so theme swaps still work.
+--
+-- `Properties` / `PropertiesDefault` map property name → either a string
+-- (looked up on Library, e.g. "AccentColor") or a Color3 literal.
 function Library:OnHighlight(HighlightInstance, Instance, Properties, PropertiesDefault)
-    HighlightInstance.MouseEnter:Connect(function()
+    local fadeInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+
+    local function resolveGoals(Props)
         local Reg = Library.RegistryMap[Instance];
-
-        for Property, ColorIdx in next, Properties do
-            Instance[Property] = Library[ColorIdx] or ColorIdx;
-
+        local goals = {};
+        for Property, ColorIdx in next, Props do
+            local resolved = Library[ColorIdx] or ColorIdx;
+            goals[Property] = resolved;
             if Reg and Reg.Properties[Property] then
                 Reg.Properties[Property] = ColorIdx;
             end;
         end;
-    end)
+        return goals;
+    end;
+
+    HighlightInstance.MouseEnter:Connect(function()
+        TweenService:Create(Instance, fadeInfo, resolveGoals(Properties)):Play();
+    end);
 
     HighlightInstance.MouseLeave:Connect(function()
-        local Reg = Library.RegistryMap[Instance];
-
-        for Property, ColorIdx in next, PropertiesDefault do
-            Instance[Property] = Library[ColorIdx] or ColorIdx;
-
-            if Reg and Reg.Properties[Property] then
-                Reg.Properties[Property] = ColorIdx;
-            end;
-        end;
-    end)
+        TweenService:Create(Instance, fadeInfo, resolveGoals(PropertiesDefault)):Play();
+    end);
 end;
 
 function Library:MouseIsOverOpenedFrame()
