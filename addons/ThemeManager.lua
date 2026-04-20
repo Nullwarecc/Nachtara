@@ -17,7 +17,7 @@
 local httpService = game:GetService('HttpService')
 
 local ThemeManager = {}
-ThemeManager.Folder = 'LinoriaLibSettings'
+ThemeManager.Folder = 'sanyui'
 ThemeManager.Library = nil
 ThemeManager.DefaultTheme = 'Default'
 
@@ -50,7 +50,7 @@ function ThemeManager:BuildFolderTree()
     end
     table.insert(paths, self.Folder .. '/themes')
     table.insert(paths, self.Folder .. '/settings')
-    for _, p in ipairs(paths) do
+    for _, p in paths do
         if not isfolder(p) then makefolder(p) end
     end
 end
@@ -67,7 +67,7 @@ function ThemeManager:ApplyTheme(theme)
 
     -- Built-ins are { sortIndex, palette }, custom themes are the palette directly.
     local palette = customData or data[2]
-    for field, hex in pairs(palette) do
+    for field, hex in palette do
         self.Library[field] = Color3.fromHex(hex)
         if Options[field] then
             Options[field]:SetValueRGB(Color3.fromHex(hex))
@@ -79,7 +79,7 @@ end
 function ThemeManager:ThemeUpdate()
     -- Pull current colors from the Options ColorPickers so live edits propagate
     -- even when the user didn't open the Themes tab (registry refresh only).
-    for _, field in ipairs(THEME_FIELDS) do
+    for _, field in THEME_FIELDS do
         if Options and Options[field] then
             self.Library[field] = Options[field].Value
         end
@@ -127,7 +127,7 @@ function ThemeManager:SaveCustomTheme(file)
         return self.Library:Notify('Invalid theme file name', 3)
     end
     local theme = {}
-    for _, field in ipairs(THEME_FIELDS) do
+    for _, field in THEME_FIELDS do
         theme[field] = Options[field].Value:ToHex()
     end
     writefile(self.Folder .. '/themes/' .. file .. '.json', httpService:JSONEncode(theme))
@@ -136,7 +136,7 @@ end
 function ThemeManager:ReloadCustomThemes()
     local out = {}
     local list = listfiles(self.Folder .. '/themes')
-    for _, file in ipairs(list) do
+    for _, file in list do
         if file:sub(-5) == '.json' then
             local pos = file:find('.json', 1, true)
             while pos > 0 do
@@ -160,7 +160,7 @@ function ThemeManager:CreateThemeManager(groupbox)
     groupbox:AddLabel('Font color')      :AddColorPicker('FontColor',       { Default = self.Library.FontColor })
 
     local themeNames = {}
-    for name in pairs(self.BuiltInThemes) do themeNames[#themeNames + 1] = name end
+    for name in self.BuiltInThemes do themeNames[#themeNames + 1] = name end
     table.sort(themeNames, function(a, b) return self.BuiltInThemes[a][1] < self.BuiltInThemes[b][1] end)
 
     groupbox:AddDivider()

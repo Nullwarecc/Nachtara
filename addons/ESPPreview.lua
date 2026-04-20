@@ -62,7 +62,7 @@ end
 
 function ESPPreview:SetFakeData(tbl)
     if type(tbl) ~= 'table' then return end
-    for k, v in pairs(tbl) do self.FakeData[k] = v end
+    for k, v in tbl do self.FakeData[k] = v end
 end
 
 -- ───────── Window creation ─────────
@@ -336,7 +336,7 @@ local function updatePreview(refs, fakeData, dt)
     local hbPos = Options.ESPHealthbarPos and Options.ESPHealthbarPos.Value or 'Top'
     local hbC   = Options.ESPHealthbarColor  and Options.ESPHealthbarColor.Value  or Color3.fromRGB(12, 255, 93)
     local hbC2  = Options.ESPHealthbarColor2 and Options.ESPHealthbarColor2.Value or Color3.new(1, 0, 0)
-    for pos, hb in pairs(refs.healthbars) do
+    for pos, hb in refs.healthbars do
         if hbOn and pos == hbPos then
             hb.frame.Visible = true
             local targetSize
@@ -381,11 +381,11 @@ local function updatePreview(refs, fakeData, dt)
     end
 
     -- Labels -------------------------------------------------------------
-    for _, lbl in pairs(refs.labels) do lbl.Text = ''; lbl.Visible = false end
+    for _, lbl in refs.labels do lbl.Text = ''; lbl.Visible = false end
     local topTxt, rightTxt, leftTxt, downTxt = '', '', '', ''
     local topColor, rightColor, leftColor, downColor = nil, nil, nil, nil
     local topSize, rightSize, leftSize, downSize = 12, 12, 12, 12
-    for _, it in ipairs(ESP_INFO_TYPES) do
+    for _, it in ESP_INFO_TYPES do
         local tn = 'ESP' .. it
         if Toggles[tn] and Toggles[tn].Value then
             local p = Options['ESP' .. it .. 'Pos'] and Options['ESP' .. it .. 'Pos'].Value or 'Top'
@@ -436,7 +436,7 @@ local function ensureBuilt(self)
     -- Keep fonts in sync with library-wide font selection.
     self.Library:OnFontChanged(function(face)
         if not self._refs then return end
-        for _, lbl in pairs(self._refs.labels) do
+        for _, lbl in self._refs.labels do
             pcall(function() lbl.FontFace = face end)
         end
     end)
@@ -469,8 +469,8 @@ end
 function ESPPreview:BindTabs(window, boundTabs)
     if not window or not window.Tabs then return end
     local set = {}
-    for _, t in ipairs(boundTabs or {}) do set[t] = true; self.Bound[t] = true end
-    for _, tab in pairs(window.Tabs) do
+    for _, t in boundTabs or {} do set[t] = true; self.Bound[t] = true end
+    for _, tab in window.Tabs do
         if tab._espPreviewHooked then continue end
         tab._espPreviewHooked = true
         local origShow = tab.ShowTab

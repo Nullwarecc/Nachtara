@@ -192,7 +192,7 @@ end;
 -- ═══════════════════════════════════════════════════════════════════
 
 Library.Fonts = {};                                     -- [name] = Font object
-Library.FontFolder = 'LinoriaLibSettings/fonts';        -- on-disk cache path
+Library.FontFolder = 'sanyui/fonts';                    -- on-disk cache path
 Library.DefaultFontFace = Font.fromEnum(Enum.Font.Code);
 Library.CurrentFont = nil;                              -- nil = use DefaultFontFace
 
@@ -242,7 +242,7 @@ end;
 -- map `{ Name1 = 'url1', Name2 = 'url2' }`. Array form appends ".ttf" to the
 -- base URL; map form uses each value as the full URL.
 function Library:RegisterFontsFromRepo(baseUrl, list)
-    for k, v in pairs(list) do
+    for k, v in list do
         if type(k) == 'number' then
             Library:RegisterFont(v, baseUrl .. v .. '.ttf');
         else
@@ -264,7 +264,7 @@ function Library:SetFont(name)
     Library.CurrentFont = newFont;
     local face = Library:GetActiveFont();
     if Library.ScreenGui then
-        for _, desc in ipairs(Library.ScreenGui:GetDescendants()) do
+        for _, desc in Library.ScreenGui:GetDescendants() do
             if desc:IsA('TextLabel') or desc:IsA('TextBox') or desc:IsA('TextButton') then
                 pcall(function() desc.FontFace = face end);
             end;
@@ -273,7 +273,7 @@ function Library:SetFont(name)
     -- Notify listeners (e.g. the script's ESP code) so they can re-apply to
     -- text instances that live outside ScreenGui.
     if Library.FontListeners then
-        for _, cb in ipairs(Library.FontListeners) do
+        for _, cb in Library.FontListeners do
             pcall(cb, face, name);
         end;
     end;
@@ -290,7 +290,7 @@ end;
 
 function Library:BuildFontSection(container)
     local names = { 'Default' };
-    for k in pairs(Library.Fonts) do table.insert(names, k) end;
+    for k in Library.Fonts do table.insert(names, k) end;
     table.sort(names, function(a, b)
         if a == 'Default' then return true end;
         if b == 'Default' then return false end;
@@ -340,45 +340,64 @@ do
     end));
 end;
 
-function Library:MakeDraggable(Instance, Cutoff)
-    Instance.Active = true;
+-- Clean drag implementation using Input.Position (screen coordinates, no
+-- GuiInset offset issues). Handles mouse + touch. Drag end is tied to the
+-- SPECIFIC input that started the drag via Input.Changed, so simultaneous
+-- draggables don't interfere with each other.
+--
+-- `Cutoff` is the pixel distance from the frame's top where clicks still
+-- initiate a drag (used so a title bar is draggable but body widgets aren't).
+function Library:MakeDraggable(Frame, Cutoff)
+    Frame.Active = true;
 
-    local Dragging = false;
-    local DragOffset = Vector2.zero;
+    local dragging = false;
+    local dragStart;   -- Vector3 from Input.Position
+    local startPos;    -- UDim2 frame position at drag-start
 
-    Instance.InputBegan:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-            local RelY = Mouse.Y - Instance.AbsolutePosition.Y;
-
-            if RelY > (Cutoff or 40) then
-                return;
-            end;
-
-            -- Normalize to AnchorPoint (0,0) + offset position so dragging works
-            -- regardless of whether the window was initially centered via scale/AnchorPoint
-            local AbsPos = Instance.AbsolutePosition;
-            Instance.AnchorPoint = Vector2.new(0, 0);
-            Instance.Position = UDim2.fromOffset(AbsPos.X, AbsPos.Y);
-
-            Dragging = true;
-            DragOffset = Vector2.new(Mouse.X - AbsPos.X, Mouse.Y - AbsPos.Y);
+    Frame.InputBegan:Connect(function(Input)
+        if Input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and Input.UserInputType ~= Enum.UserInputType.Touch then
+            return;
         end;
+
+        local relY = Input.Position.Y - Frame.AbsolutePosition.Y;
+        if relY > (Cutoff or 40) then return end;
+
+        -- Normalize the anchor on first drag so subsequent position writes
+        -- don't jump. Preserves the visible screen position during the swap.
+        if Frame.AnchorPoint ~= Vector2.new(0, 0) then
+            local absPos = Frame.AbsolutePosition;
+            Frame.AnchorPoint = Vector2.new(0, 0);
+            Frame.Position = UDim2.fromOffset(absPos.X, absPos.Y);
+        end;
+
+        dragging = true;
+        dragStart = Input.Position;
+        startPos = Frame.Position;
+
+        -- Tie end-of-drag to THIS input so another widget's mouse-up doesn't
+        -- cancel our drag, and so touch + mouse coexist cleanly.
+        local changedConn;
+        changedConn = Input.Changed:Connect(function()
+            if Input.UserInputState == Enum.UserInputState.End then
+                dragging = false;
+                if changedConn then changedConn:Disconnect(); changedConn = nil end;
+            end;
+        end);
     end);
 
-    Library:GiveSignal(InputService.InputChanged:Connect(function(Input)
-        if Dragging and Input.UserInputType == Enum.UserInputType.MouseMovement then
-            Instance.Position = UDim2.fromOffset(
-                Mouse.X - DragOffset.X,
-                Mouse.Y - DragOffset.Y
-            );
+    Frame.InputChanged:Connect(function(Input)
+        if not dragging then return end;
+        if Input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and Input.UserInputType ~= Enum.UserInputType.Touch then
+            return;
         end;
-    end));
-
-    Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-            Dragging = false;
-        end;
-    end));
+        local delta = Input.Position - dragStart;
+        Frame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        );
+    end);
 end;
 
 function Library:AddToolTip(InfoStr, HoverInstance)
@@ -1487,11 +1506,11 @@ do
                         Text = Text .. '.';
                         DisplayLabel.Text = Text;
 
-                        wait(0.4);
+                        task.wait(0.4);
                     end;
                 end);
 
-                wait(0.2);
+                task.wait(0.2);
 
                 local Event;
                 Event = InputService.InputBegan:Connect(function(Input)
@@ -3218,7 +3237,7 @@ function Library:SetNotificationPosition(Pos)
     end;
 
     -- Re-anchor any currently-alive notifications so they don't drift.
-    for _, child in ipairs(Area:GetChildren()) do
+    for _, child in Area:GetChildren() do
         if child:IsA('Frame') then
             local ax = 0;
             if Pos == 'TopRight' then ax = 1;
@@ -3391,7 +3410,7 @@ function Library:CreatePlaceholderBox(Config)
         function handle:SetText(t) if lbl.Parent then lbl.Text = t end end;
         function handle:SetColor(c) if lbl.Parent then lbl.TextColor3 = c end end;
         function handle:Remove()
-            for i, v in ipairs(Box._labels) do
+            for i, v in Box._labels do
                 if v == lbl then
                     table.remove(Box._labels, i);
                     break;
@@ -3408,7 +3427,7 @@ function Library:CreatePlaceholderBox(Config)
     end;
 
     function Box:Clear()
-        for _, lbl in ipairs(self._labels) do
+        for _, lbl in self._labels do
             pcall(lbl.Destroy, lbl);
         end;
         self._labels = {};
@@ -3428,7 +3447,7 @@ function Library:CreatePlaceholderBox(Config)
     end;
 
     function Box:Destroy()
-        for i, b in ipairs(Library.PlaceholderBoxes) do
+        for i, b in Library.PlaceholderBoxes do
             if b == self then
                 table.remove(Library.PlaceholderBoxes, i);
                 break;
@@ -3542,7 +3561,7 @@ function Library:Notify(Text, Time)
     });
     -- Fade the label's UIStroke in sync with the text.
     local LabelStroke;
-    for _, c in ipairs(NotifyLabel:GetChildren()) do
+    for _, c in NotifyLabel:GetChildren() do
         if c:IsA('UIStroke') then LabelStroke = c; break end;
     end;
     if LabelStroke then LabelStroke.Transparency = 1 end;
@@ -3594,7 +3613,7 @@ function Library:Notify(Text, Time)
     if LabelStroke then
         TweenService:Create(LabelStroke, FadeIn, { Transparency = 0 }):Play();
     end;
-    for _, g in ipairs(GlowFrames) do
+    for _, g in GlowFrames do
         TweenService:Create(g.frame, FadeIn, { BackgroundTransparency = g.targetTrans }):Play();
     end;
 
@@ -3618,7 +3637,7 @@ function Library:Notify(Text, Time)
         if LabelStroke then
             TweenService:Create(LabelStroke, FadeOut, { Transparency = 1 }):Play();
         end;
-        for _, g in ipairs(GlowFrames) do
+        for _, g in GlowFrames do
             TweenService:Create(g.frame, FadeOut, { BackgroundTransparency = 1 }):Play();
         end;
         -- Shrink width simultaneously for the Linoria-style collapse feel.
@@ -4132,7 +4151,7 @@ function Library:ShowLoader(Config)
                 Parent = Tint;
             });
             local stroke;
-            for _, c in ipairs(l:GetChildren()) do
+            for _, c in l:GetChildren() do
                 if c:IsA('UIStroke') then stroke = c; stroke.Transparency = 1; break end;
             end;
             return { label = l, stroke = stroke, order = order };
@@ -4148,7 +4167,7 @@ function Library:ShowLoader(Config)
         if Blur then
             TweenService:Create(Blur, IntroInfo, { Size = 22 }):Play();
         end;
-        for _, entry in ipairs(introLabels) do
+        for _, entry in introLabels do
             task.delay((entry.order - 1) * 0.08, function()
                 TweenService:Create(entry.label, IntroInfo, { TextTransparency = 0 }):Play();
                 if entry.stroke then
@@ -4160,7 +4179,7 @@ function Library:ShowLoader(Config)
         -- Fade-in takes 1.0s, hold for IntroDuration (default 1.4s), fade-out 1.0s.
         task.wait(1.0 + (Config.IntroDuration or 1.4));
 
-        for _, entry in ipairs(introLabels) do
+        for _, entry in introLabels do
             TweenService:Create(entry.label, IntroInfo, { TextTransparency = 1 }):Play();
             if entry.stroke then
                 TweenService:Create(entry.stroke, IntroInfo, { Transparency = 1 }):Play();
@@ -5137,7 +5156,7 @@ function Library:CreateWindow(...)
 
         -- Refresh PlaceholderBoxes: empty ones show while menu is open (so the
         -- user can grab and drag them into place) and hide again when closed.
-        for _, Box in ipairs(Library.PlaceholderBoxes) do
+        for _, Box in Library.PlaceholderBoxes do
             if Box._refreshVisibility then
                 pcall(Box._refreshVisibility);
             end;
@@ -5147,44 +5166,52 @@ function Library:CreateWindow(...)
             -- A bit scuffed, but if we're going from not toggled -> toggled we want to show the frame immediately so that the fade is visible.
             Outer.Visible = true;
 
+            -- Menu crosshair: 4 Frames forming a plus around the mouse. Uses a
+            -- dedicated ScreenGui parented to CoreGui so it ignores the topbar
+            -- inset and sits above the main menu. Replaces a Drawing-based
+            -- implementation — Drawing isn't UI and isn't available on every
+            -- executor.
             task.spawn(function()
                 local State = InputService.MouseIconEnabled;
-                local S = 4;
-                local Gap = 1;
+                local S, Gap = 4, 1;
 
-                -- 4 short lines forming a plus with a gap in the center
-                local Lines = {};
-                for i = 1, 4 do
-                    local L = Drawing.new('Line');
-                    L.Thickness = 1;
-                    L.Color = Color3.new(1, 1, 1);
-                    L.Visible = true;
-                    Lines[i] = L;
+                local cursorGui = Instance.new('ScreenGui');
+                ProtectGui(cursorGui);
+                cursorGui.Name = 'SanyuiCursor';
+                cursorGui.IgnoreGuiInset = true;
+                cursorGui.ResetOnSpawn = false;
+                cursorGui.DisplayOrder = 100000;
+                cursorGui.Parent = CoreGui;
+
+                local function mkArm()
+                    local f = Instance.new('Frame');
+                    f.BorderSizePixel = 0;
+                    f.BackgroundColor3 = Color3.new(1, 1, 1);
+                    f.AnchorPoint = Vector2.new(0.5, 0.5);
+                    f.Parent = cursorGui;
+                    return f;
                 end;
+                local armL, armR, armT, armB = mkArm(), mkArm(), mkArm(), mkArm();
 
                 while Toggled and ScreenGui.Parent do
                     InputService.MouseIconEnabled = false;
                     local mPos = InputService:GetMouseLocation();
                     local X, Y = mPos.X, mPos.Y;
 
-                    -- Left arm
-                    Lines[1].From = Vector2.new(X - S, Y);
-                    Lines[1].To = Vector2.new(X - Gap, Y);
-                    -- Right arm
-                    Lines[2].From = Vector2.new(X + Gap, Y);
-                    Lines[2].To = Vector2.new(X + S, Y);
-                    -- Top arm
-                    Lines[3].From = Vector2.new(X, Y - S);
-                    Lines[3].To = Vector2.new(X, Y - Gap);
-                    -- Bottom arm
-                    Lines[4].From = Vector2.new(X, Y + Gap);
-                    Lines[4].To = Vector2.new(X, Y + S);
+                    armL.Size     = UDim2.fromOffset(S - Gap, 1);
+                    armL.Position = UDim2.fromOffset(X - Gap - (S - Gap) / 2, Y);
+                    armR.Size     = UDim2.fromOffset(S - Gap, 1);
+                    armR.Position = UDim2.fromOffset(X + Gap + (S - Gap) / 2, Y);
+                    armT.Size     = UDim2.fromOffset(1, S - Gap);
+                    armT.Position = UDim2.fromOffset(X, Y - Gap - (S - Gap) / 2);
+                    armB.Size     = UDim2.fromOffset(1, S - Gap);
+                    armB.Position = UDim2.fromOffset(X, Y + Gap + (S - Gap) / 2);
 
                     RenderStepped:Wait();
                 end;
 
                 InputService.MouseIconEnabled = State;
-                for i = 1, 4 do Lines[i]:Remove() end;
+                pcall(cursorGui.Destroy, cursorGui);
             end);
         end;
 

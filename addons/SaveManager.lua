@@ -25,8 +25,10 @@
 local httpService = game:GetService('HttpService')
 
 local SaveManager = {}
-SaveManager.Folder = 'LinoriaLibSettings'
+SaveManager.Folder = 'sanyui'
 SaveManager.Ignore = {}
+SaveManager.PreSaveHooks  = {}   -- fn(data) — mutate data table before encryption
+SaveManager.PostLoadHooks = {}   -- fn(data) — receive decrypted data after decode
 
 -- ───────── Cipher ─────────
 --
@@ -141,7 +143,7 @@ end
 
 function SaveManager:BuildFolderTree()
     local paths = { self.Folder, self.Folder .. '/themes', self.Folder .. '/settings' }
-    for _, p in ipairs(paths) do
+    for _, p in paths do
         if not isfolder(p) then makefolder(p) end
     end
 end
@@ -153,6 +155,24 @@ end
 
 function SaveManager:SetLibrary(lib)
     self.Library = lib
+end
+
+-- Extension API: scripts can attach extra state to configs without replacing
+-- the whole save/load pipeline. Hooks run in registration order.
+--
+-- Example (main.lua skin overrides):
+--   SaveManager:AddPreSaveHook(function(data)
+--       data._skinOverrides = buildSkinTable()
+--   end)
+--   SaveManager:AddPostLoadHook(function(data)
+--       if data._skinOverrides then restoreSkins(data._skinOverrides) end
+--   end)
+function SaveManager:AddPreSaveHook(fn)
+    if type(fn) == 'function' then table.insert(self.PreSaveHooks, fn) end
+end
+
+function SaveManager:AddPostLoadHook(fn)
+    if type(fn) == 'function' then table.insert(self.PostLoadHooks, fn) end
 end
 
 -- ───────── Save / Load ─────────
@@ -171,6 +191,10 @@ function SaveManager:Save(name)
         if self.Ignore[idx] then continue end
         table.insert(data.objects, self.Parser[option.Type].Save(idx, option))
     end
+
+    -- Pre-save hooks: script-level extensions (e.g. skin overrides) can
+    -- attach extra state here. Errors in hooks don't abort the save.
+    for _, fn in self.PreSaveHooks do pcall(fn, data) end
 
     local okEncode, json = pcall(httpService.JSONEncode, httpService, data)
     if not okEncode then return false, 'failed to encode data' end
@@ -212,13 +236,20 @@ function SaveManager:Load(name)
             task.spawn(function() self.Parser[option.type].Load(option.idx, option) end)
         end
     end
+
+    -- Post-load hooks run after standard objects are restored so they can
+    -- depend on the final toggle/option state (e.g. skin-loader reads the
+    -- current SkinChanger toggle state).
+    for _, fn in self.PostLoadHooks do
+        task.spawn(function() pcall(fn, decoded) end)
+    end
     return true
 end
 
 function SaveManager:RefreshConfigList()
     local list = listfiles(self.Folder .. '/settings')
     local out, seen = {}, {}
-    for _, file in ipairs(list) do
+    for _, file in list do
         local ext = file:sub(-4)
         if ext == '.nch' or file:sub(-5) == '.json' then
             -- Extract basename between last path separator and the extension.
