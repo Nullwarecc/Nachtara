@@ -1694,7 +1694,14 @@ do
 
             ContainerLabel.Text = string.format('[%s] %s (%s)', KeyPicker.Value, Info.Text, KeyPicker.Mode);
 
-            ContainerLabel.Visible = true;
+            -- Visible only while the bind is "active": Hold mode = key is
+            -- held, Toggle mode = toggle is on, Always mode = always.
+            -- GetState() already encodes that. InputBegan/InputEnded both
+            -- call Update so Hold-mode visibility flips live with keypress.
+            -- Empty HUD collapses to just the title bar (size recompute
+            -- below) — matches the requested minimal look when nothing's
+            -- active.
+            ContainerLabel.Visible = State;
             ContainerLabel.TextColor3 = State and Library.AccentColor or Library.FontColor;
 
             Library.RegistryMap[ContainerLabel].Properties.TextColor3 = State and 'AccentColor' or 'FontColor';
@@ -3572,7 +3579,23 @@ function Library:CreatePlaceholderBox(Config)
     local Title = Config.Title;
     local Width = Config.Width or 200;
     local LabelSize = Config.LabelSize or 14;
-    local Position = Config.Position or UDim2.new(1, -230, 0, 50);
+    -- Auto-stack vertically when caller doesn't provide a Position so
+    -- multiple PlaceholderBoxes (Spectators + Movement Graph + future
+    -- HUDs) don't all spawn on top of each other in the top-right
+    -- corner. Counter is monotonic — Box:Destroy doesn't free its slot,
+    -- but boxes destroyed before the next spawn keep the layout
+    -- predictable when the user re-enables them.
+    Library._phSpawnCount = Library._phSpawnCount or 0;
+    local Position;
+    if Config.Position then
+        Position = Config.Position;
+    else
+        local idx = Library._phSpawnCount;
+        Library._phSpawnCount = idx + 1;
+        -- Right-align column, ~120px vertical gap so even a 4-label box
+        -- doesn't overlap the next one. First box at y=50, second y=170.
+        Position = UDim2.new(1, -(Width + 30), 0, 50 + idx * 120);
+    end;
 
     local HeaderPadding = Title and 20 or 4;
     local FooterPadding = 4;

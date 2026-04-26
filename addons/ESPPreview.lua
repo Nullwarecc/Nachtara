@@ -243,10 +243,16 @@ local function buildESPBox(root, fontFace)
     mainBoxStroke.LineJoinMode = Enum.LineJoinMode.Miter; mainBoxStroke.Parent = fillBox
     local mainBoxGrad = Instance.new('UIGradient'); mainBoxGrad.Parent = mainBoxStroke
 
+    -- innerBox sits at ZIndex 48 so its black inline stroke draws ON TOP of
+    -- the colored mainBox stroke. Library.ScreenGui uses ZIndexBehavior.Global,
+    -- so a tied 47/47 between fillBox and innerBox could render the inline
+    -- under the colored stroke (the user reported the black inline missing
+    -- after the lila stroke). The in-game billboard works because BillboardGuis
+    -- in CoreGui don't share global ordering with this preview tree.
     local innerBox = Instance.new('Frame')
     innerBox.Name = 'InnerBox'; innerBox.BackgroundTransparency = 1; innerBox.BorderSizePixel = 0
     innerBox.Position = UDim2.new(0.045, 1, 0.025, 1); innerBox.Size = UDim2.new(0.91, -2, 0.95, -2)
-    innerBox.ZIndex = 47; innerBox.Parent = root
+    innerBox.ZIndex = 48; innerBox.Parent = root
     local inlineStroke = Instance.new('UIStroke')
     inlineStroke.Name = 'Inline'; inlineStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     inlineStroke.Color = Color3.new(0, 0, 0); inlineStroke.Thickness = 1
