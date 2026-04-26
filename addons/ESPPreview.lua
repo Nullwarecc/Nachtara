@@ -223,40 +223,75 @@ local function buildESPBox(root, fontFace)
     local hbLeft,  hbLeftGrad  = mkHB('HBLeft',  Vector2.new(0.9, 0), UDim2.new(0, 0, 0.025, 0),     UDim2.new(0, 1, 0.95, 0), 90)
     local hbDown,  hbDownGrad  = mkHB('HBDown',  Vector2.new(0, 0),   UDim2.new(0.045, 0, 0.999, 0), UDim2.new(0.91, 0, 0, 1),  0)
 
+    -- Box layers — NESTED SOLID FRAMES (matches Library:CreatePlaceholderBox).
+    -- Strokes-on-transparent-frames render unreliably under
+    -- Library.ScreenGui's ZIndexBehavior.Global — the inner black ring
+    -- repeatedly went missing even with explicit ZIndex bumps. The
+    -- placeholder boxes (Spectator / Movement Graph) achieve their
+    -- black-grey-black sandwich with nested solid frames and that pattern
+    -- visually matches what the user wants here, so we mirror it exactly.
+    --
+    -- Each child is inset 1px (Position +1, Size -2). What's exposed is
+    -- the parent's 1px-wide edge band — black → colored → black → fill.
+    --
+    -- The fill-area frame uses a solid backing (Library.MainColor) when
+    -- ESPFill is OFF so it visually disappears against the preview
+    -- window background, and the user's fill color/transparency when ON.
+    -- True 1=transparent isn't an option here because that would expose
+    -- the inner black ring's interior; lerping toward MainColor preserves
+    -- the "no fill" look and follows the same pattern PlaceholderBox uses.
+
     local outerBox = Instance.new('Frame')
-    outerBox.Name = 'OuterBox'; outerBox.BackgroundTransparency = 1; outerBox.BorderSizePixel = 0
-    outerBox.Position = UDim2.new(0.045, -1, 0.025, -1); outerBox.Size = UDim2.new(0.91, 2, 0.95, 2)
-    outerBox.ZIndex = 46; outerBox.Parent = root
-    local outlineStroke = Instance.new('UIStroke')
-    outlineStroke.Name = 'Outline'; outlineStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    outlineStroke.Color = Color3.new(0, 0, 0); outlineStroke.Thickness = 1
-    outlineStroke.LineJoinMode = Enum.LineJoinMode.Miter; outlineStroke.Parent = outerBox
+    outerBox.Name = 'OuterBox'
+    outerBox.BackgroundColor3 = Color3.new(0, 0, 0)
+    outerBox.BorderSizePixel = 0
+    outerBox.Position = UDim2.new(0.045, -1, 0.025, -1)
+    outerBox.Size = UDim2.new(0.91, 2, 0.95, 2)
+    outerBox.ZIndex = 46
+    outerBox.Parent = root
 
-    local fillBox = Instance.new('Frame')
-    fillBox.Name = 'FillBox'; fillBox.BackgroundTransparency = 1; fillBox.BorderSizePixel = 0
-    fillBox.Position = UDim2.new(0.045, 0, 0.025, 0); fillBox.Size = UDim2.new(0.91, 0, 0.95, 0)
-    fillBox.ZIndex = 47; fillBox.Parent = root
-    local fillGrad = Instance.new('UIGradient'); fillGrad.Name = 'Fill'; fillGrad.Enabled = false; fillGrad.Parent = fillBox
-    local mainBoxStroke = Instance.new('UIStroke')
-    mainBoxStroke.Name = 'MainBox'; mainBoxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    mainBoxStroke.Color = Color3.new(1, 1, 1); mainBoxStroke.Thickness = 1
-    mainBoxStroke.LineJoinMode = Enum.LineJoinMode.Miter; mainBoxStroke.Parent = fillBox
-    local mainBoxGrad = Instance.new('UIGradient'); mainBoxGrad.Parent = mainBoxStroke
+    -- Colored ring — replaces the old MainBox UIStroke. BackgroundColor3
+    -- carries the color (gradient mode toggles a UIGradient on this BG).
+    local colorRing = Instance.new('Frame')
+    colorRing.Name = 'ColorRing'
+    colorRing.BackgroundColor3 = Color3.new(1, 1, 1)
+    colorRing.BorderSizePixel = 0
+    colorRing.Position = UDim2.new(0, 1, 0, 1)
+    colorRing.Size = UDim2.new(1, -2, 1, -2)
+    colorRing.ZIndex = 47
+    colorRing.Parent = outerBox
+    local mainBoxGrad = Instance.new('UIGradient')
+    mainBoxGrad.Name = 'MainBox'
+    mainBoxGrad.Enabled = false
+    mainBoxGrad.Parent = colorRing
 
-    -- innerBox sits at ZIndex 48 so its black inline stroke draws ON TOP of
-    -- the colored mainBox stroke. Library.ScreenGui uses ZIndexBehavior.Global,
-    -- so a tied 47/47 between fillBox and innerBox could render the inline
-    -- under the colored stroke (the user reported the black inline missing
-    -- after the lila stroke). The in-game billboard works because BillboardGuis
-    -- in CoreGui don't share global ordering with this preview tree.
+    -- Inner black ring (the inline). With nested solid frames this is
+    -- guaranteed to render — it's just the exposed edge of an opaque
+    -- BLACK frame that's been covered in the center by fillBox.
     local innerBox = Instance.new('Frame')
-    innerBox.Name = 'InnerBox'; innerBox.BackgroundTransparency = 1; innerBox.BorderSizePixel = 0
-    innerBox.Position = UDim2.new(0.045, 1, 0.025, 1); innerBox.Size = UDim2.new(0.91, -2, 0.95, -2)
-    innerBox.ZIndex = 48; innerBox.Parent = root
-    local inlineStroke = Instance.new('UIStroke')
-    inlineStroke.Name = 'Inline'; inlineStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    inlineStroke.Color = Color3.new(0, 0, 0); inlineStroke.Thickness = 1
-    inlineStroke.LineJoinMode = Enum.LineJoinMode.Miter; inlineStroke.Parent = innerBox
+    innerBox.Name = 'InnerBox'
+    innerBox.BackgroundColor3 = Color3.new(0, 0, 0)
+    innerBox.BorderSizePixel = 0
+    innerBox.Position = UDim2.new(0, 1, 0, 1)
+    innerBox.Size = UDim2.new(1, -2, 1, -2)
+    innerBox.ZIndex = 48
+    innerBox.Parent = colorRing
+
+    -- Fill area — innermost layer. Default BG = MainColor so when the
+    -- user has ESPFill off the center looks empty (matches the preview
+    -- window's background). updatePreview overrides BG when ESPFill is on.
+    local fillBox = Instance.new('Frame')
+    fillBox.Name = 'FillBox'
+    fillBox.BackgroundColor3 = Library.MainColor
+    fillBox.BorderSizePixel = 0
+    fillBox.Position = UDim2.new(0, 1, 0, 1)
+    fillBox.Size = UDim2.new(1, -2, 1, -2)
+    fillBox.ZIndex = 49
+    fillBox.Parent = innerBox
+    Library:AddToRegistry(fillBox, { BackgroundColor3 = 'MainColor' })
+
+    local fillGrad = Instance.new('UIGradient')
+    fillGrad.Name = 'Fill'; fillGrad.Enabled = false; fillGrad.Parent = fillBox
 
     local glowGrad = Instance.new('UIGradient')
     glowGrad.Name = 'Glow'; glowGrad.Rotation = 180
@@ -269,8 +304,8 @@ local function buildESPBox(root, fontFace)
 
     return {
         fillBox = fillBox, outerBox = outerBox, innerBox = innerBox,
-        fillGrad = fillGrad, mainBoxStroke = mainBoxStroke, mainBoxGrad = mainBoxGrad,
-        glowGrad = glowGrad, inlineStroke = inlineStroke, outlineStroke = outlineStroke,
+        colorRing = colorRing,
+        fillGrad = fillGrad, mainBoxGrad = mainBoxGrad, glowGrad = glowGrad,
         labels     = { Top = labelTop, Right = labelRight, Left = labelLeft, Down = labelDown },
         healthbars = {
             Top   = { frame = hbTop,   grad = hbTopGrad   },
@@ -380,11 +415,9 @@ local function updatePreview(win, refs, fakeData, dt)
     local bw = BOX_W   / totalW
     local bh = BOX_H   / totalH
 
-    -- Size / position the box layers + label anchors (same math as the
-    -- real updateESP, just driven by our dynamic bx/by/bw/bh).
+    -- Position only the outerBox; colorRing / innerBox / fillBox are now
+    -- nested children with hard-coded `+1, -2` insets, so they auto-track.
     refs.outerBox.Position = UDim2.new(bx, -1, by, -1); refs.outerBox.Size = UDim2.new(bw, 2, bh, 2)
-    refs.fillBox.Position  = UDim2.new(bx, 0, by, 0);   refs.fillBox.Size  = UDim2.new(bw, 0, bh, 0)
-    refs.innerBox.Position = UDim2.new(bx, 1, by, 1);   refs.innerBox.Size = UDim2.new(bw, -2, bh, -2)
 
     -- Read healthbar settings up front so label sizing on the same side
     -- can leave a gap for the bar (5px past the box edge). Without this,
@@ -409,12 +442,18 @@ local function updatePreview(win, refs, fakeData, dt)
     local hpFrac = 0.68
 
     -- Box layers ---------------------------------------------------------
+    -- Visibility toggle: outerBox alone — colorRing / innerBox / fillBox
+    -- are children, so hiding outerBox hides the whole chain.
     local boxOn = Toggles.ESPBox and Toggles.ESPBox.Value
-    refs.fillBox.Visible = boxOn; refs.outerBox.Visible = boxOn; refs.innerBox.Visible = boxOn
+    refs.outerBox.Visible = boxOn
     if boxOn then
         local c1 = Options.ESPBoxColor and Options.ESPBoxColor.Value or Color3.new(1, 1, 1)
         if Toggles.ESPBoxGradient and Toggles.ESPBoxGradient.Value then
             local c2 = Options.ESPBoxColor2 and Options.ESPBoxColor2.Value or Color3.new(1, 0, 0)
+            -- Gradient mode: BG=white so the UIGradient's keypoint colors
+            -- pass through unmodified (Background is multiplied with the
+            -- gradient color).
+            refs.colorRing.BackgroundColor3 = Color3.new(1, 1, 1)
             refs.mainBoxGrad.Enabled = true
             refs.mainBoxGrad.Color = ColorSequence.new({
                 ColorSequenceKeypoint.new(0, c1), ColorSequenceKeypoint.new(1, c2),
@@ -423,17 +462,25 @@ local function updatePreview(win, refs, fakeData, dt)
                 boxRot = (boxRot + (Options.ESPBoxGradRot and Options.ESPBoxGradRot.Value or 90) * dt) % 360
             end
             refs.mainBoxGrad.Rotation = boxRot
-            refs.mainBoxStroke.Color = Color3.new(1, 1, 1)
         else
+            -- Static mode: gradient off, BG carries the user's chosen color.
             refs.mainBoxGrad.Enabled = false
-            refs.mainBoxStroke.Color = c1
+            refs.colorRing.BackgroundColor3 = c1
         end
     end
 
+    -- Fill area. With nested solid frames, "no fill" can't be implemented
+    -- as full transparency (that exposes innerBox's BLACK interior). We
+    -- lerp toward Library.MainColor instead — same trick PlaceholderBox
+    -- uses to make its interior look "empty". User-set transparency in
+    -- the slider becomes "how much MainColor bleeds through" so the
+    -- preview still reflects relative opacity changes.
     if Toggles.ESPFill and Toggles.ESPFill.Value and boxOn then
         local fc = Options.ESPFillColor and Options.ESPFillColor.Value or Color3.new(1, 1, 1)
-        refs.fillBox.BackgroundTransparency = Options.ESPFillTrans and Options.ESPFillTrans.Value or 0.8
-        refs.fillBox.BackgroundColor3 = fc
+        local fcTrans = Options.ESPFillTrans and Options.ESPFillTrans.Value or 0.8
+        refs.fillBox.BackgroundTransparency = 0
+        local mainCol = Library.MainColor or Color3.new(0, 0, 0)
+        refs.fillBox.BackgroundColor3 = fc:Lerp(mainCol, fcTrans)
         refs.fillGrad.Enabled = false; refs.glowGrad.Enabled = false
         local m = Options.ESPFillMode and Options.ESPFillMode.Value or 'Static'
         if m == 'Gradient' then
@@ -441,7 +488,8 @@ local function updatePreview(win, refs, fakeData, dt)
             refs.fillBox.BackgroundColor3 = Color3.new(1, 1, 1)
             refs.fillGrad.Enabled = true
             refs.fillGrad.Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, fc), ColorSequenceKeypoint.new(1, fc2),
+                ColorSequenceKeypoint.new(0, fc:Lerp(mainCol, fcTrans)),
+                ColorSequenceKeypoint.new(1, fc2:Lerp(mainCol, fcTrans)),
             })
             if Toggles.ESPFillRotation and Toggles.ESPFillRotation.Value then
                 fillRot = (fillRot + (Options.ESPFillGradRot and Options.ESPFillGradRot.Value or 90) * dt) % 360
@@ -452,11 +500,14 @@ local function updatePreview(win, refs, fakeData, dt)
             refs.fillBox.BackgroundColor3 = Color3.new(1, 1, 1)
             refs.glowGrad.Enabled = true
             refs.glowGrad.Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, fc), ColorSequenceKeypoint.new(1, fc2),
+                ColorSequenceKeypoint.new(0, fc:Lerp(mainCol, fcTrans)),
+                ColorSequenceKeypoint.new(1, fc2:Lerp(mainCol, fcTrans)),
             })
         end
     else
-        refs.fillBox.BackgroundTransparency = 1
+        -- ESPFill OFF: collapse fill area to MainColor so it looks empty.
+        refs.fillBox.BackgroundTransparency = 0
+        refs.fillBox.BackgroundColor3 = Library.MainColor or Color3.new(0, 0, 0)
         refs.fillGrad.Enabled = false; refs.glowGrad.Enabled = false
     end
 
