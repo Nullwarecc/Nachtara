@@ -750,8 +750,42 @@ function Library:MapValue(Value, MinA, MaxA, MinB, MaxB)
 end;
 
 function Library:GetTextBounds(Text, Font, Size, Resolution)
-    local Bounds = TextService:GetTextSize(Text, Size, Font, Resolution or Vector2.new(1920, 1080))
-    return Bounds.X, Bounds.Y
+    -- Resolve to a Font INSTANCE — the library auto-applies
+    -- Library:GetActiveFont() to every TextLabel under ScreenGui (see
+    -- SetFont + OnFontChanged), so width measurements should track the
+    -- active face. Passing the legacy Library.Font (Enum.Font.Code) into
+    -- GetTextSize would undersize labels rendered with custom fonts whose
+    -- glyphs are wider, leaving empty padding on the right side of
+    -- notifications, watermarks, and any other auto-sized container that
+    -- relies on these bounds. The sole API that accepts a Font instance is
+    -- GetTextBoundsAsync; GetTextSize only takes Enum.Font.
+    local face
+    if typeof(Font) == 'Font' then
+        face = Font
+    else
+        face = Library:GetActiveFont()
+    end
+
+    -- GetTextBoundsAsync yields once per font asset to load; subsequent
+    -- calls hit the engine cache. Wrapped in pcall so a load failure
+    -- (invalid asset, restricted thread, etc.) falls back to the legacy
+    -- GetTextSize path instead of returning nil to the caller.
+    local ok, bounds = pcall(function()
+        local params = Instance.new('GetTextBoundsParams')
+        params.Text = Text
+        params.Font = face
+        params.Size = Size
+        params.Width = (Resolution or Vector2.new(1920, 1080)).X
+        return TextService:GetTextBoundsAsync(params)
+    end)
+    if ok and bounds then return bounds.X, bounds.Y end
+
+    -- Fallback: legacy Enum.Font path. Less accurate for custom fonts but
+    -- guaranteed not to error or return nil.
+    local enumFont = (typeof(Font) == 'EnumItem') and Font or Library.Font
+    local b = TextService:GetTextSize(Text, Size, enumFont,
+        Resolution or Vector2.new(1920, 1080))
+    return b.X, b.Y
 end;
 
 function Library:GetDarkerColor(Color)

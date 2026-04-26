@@ -312,14 +312,23 @@ end
 
 -- Measure pixel bounds the text will take. Returns (width, height) in pixels.
 --
--- CRITICAL: GetTextSize expects an `Enum.Font` EnumItem for the font arg, NOT
--- a `Font` object (as returned by Font.fromEnum or Font.new). Passing a Font
--- object raises "Unable to cast Font to Font" every frame — the error spam
--- triggered BAC Alpha-3B (error-pattern anti-cheat) and kicked the user.
--- Always use the EnumItem directly. pcall wrapper prevents future type drift
--- from ever reaching BAC.
+-- Measures with the live ACTIVE font face when a Library handle is available
+-- (the preview labels are auto-rebound to Library:GetActiveFont() via
+-- OnFontChanged, so measurements have to use the same face or the box grows
+-- empty padding around custom-font text — exact mirror of the same bug we
+-- fixed for in-game notifications). Falls through to the legacy GetTextSize
+-- path before SetLibrary runs (pre-build measure calls) or if the modern API
+-- rejects, so the pcall+fallback also keeps Alpha-3B safe from any error
+-- spam if the asset can't be resolved.
 local function measureText(text, size)
     if not text or text == '' then return 0, 0 end
+    local lib = ESPPreview.Library
+    if lib and lib.GetTextBounds then
+        local face = lib.GetActiveFont and lib:GetActiveFont() or nil
+        local ok, w, h = pcall(lib.GetTextBounds, lib, text, face, size,
+            Vector2.new(math.huge, math.huge))
+        if ok and w then return w, h end
+    end
     local ok, b = pcall(game:GetService('TextService').GetTextSize,
         game:GetService('TextService'),
         text, size, Enum.Font.Code, Vector2.new(math.huge, math.huge))
@@ -371,10 +380,24 @@ local function updatePreview(win, refs, fakeData, dt)
     refs.fillBox.Position  = UDim2.new(bx, 0, by, 0);   refs.fillBox.Size  = UDim2.new(bw, 0, bh, 0)
     refs.innerBox.Position = UDim2.new(bx, 1, by, 1);   refs.innerBox.Size = UDim2.new(bw, -2, bh, -2)
 
-    refs.labels.Top.Position   = UDim2.new(bx, 0, 0, 0);                 refs.labels.Top.Size   = UDim2.new(bw, 0, 0, marginT - 2)
-    refs.labels.Down.Position  = UDim2.new(bx, 0, by + bh, 2);           refs.labels.Down.Size  = UDim2.new(bw, 0, 0, marginB - 2)
-    refs.labels.Right.Position = UDim2.new(bx + bw, 2, by, 0);           refs.labels.Right.Size = UDim2.new(0, marginR - 2, bh, 0)
-    refs.labels.Left.Position  = UDim2.new(bx, -(marginL - 2), by, 0);   refs.labels.Left.Size  = UDim2.new(0, marginL - 2, bh, 0)
+    -- Read healthbar settings up front so label sizing on the same side
+    -- can leave a gap for the bar (5px past the box edge). Without this,
+    -- text stacked on the same edge as the bar visually collides with the
+    -- 1px bar inside the same margin. Mirror of the in-game updateESP fix.
+    local hbOnEarly = Toggles.ESPHealthbar and Toggles.ESPHealthbar.Value
+    local hbPosEarly = Options.ESPHealthbarPos and Options.ESPHealthbarPos.Value or 'Top'
+    local padTop, padDown, padRight, padLeft = 0, 0, 0, 0
+    if hbOnEarly then
+        if hbPosEarly == 'Top' then padTop = 5
+        elseif hbPosEarly == 'Down' then padDown = 5
+        elseif hbPosEarly == 'Right' then padRight = 5
+        elseif hbPosEarly == 'Left' then padLeft = 5 end
+    end
+
+    refs.labels.Top.Position   = UDim2.new(bx, 0, 0, 0);                            refs.labels.Top.Size   = UDim2.new(bw, 0, 0, marginT - 2 - padTop)
+    refs.labels.Down.Position  = UDim2.new(bx, 0, by + bh, 2 + padDown);            refs.labels.Down.Size  = UDim2.new(bw, 0, 0, marginB - 2 - padDown)
+    refs.labels.Right.Position = UDim2.new(bx + bw, 2 + padRight, by, 0);           refs.labels.Right.Size = UDim2.new(0, marginR - 2 - padRight, bh, 0)
+    refs.labels.Left.Position  = UDim2.new(bx, -(marginL - 2), by, 0);              refs.labels.Left.Size  = UDim2.new(0, marginL - 2 - padLeft, bh, 0)
 
     -- Fake HP fraction so healthbars don't appear full-size.
     local hpFrac = 0.68
@@ -432,6 +455,9 @@ local function updatePreview(win, refs, fakeData, dt)
     end
 
     -- Healthbar ----------------------------------------------------------
+    -- Position is shifted 1px back and Size carries +2*hpFrac so the bar
+    -- aligns 1:1 with outerBox's 1px overhang at full HP and still shrinks
+    -- correctly when damaged. Mirror of the fix applied to in-game updateESP.
     local hbOn  = Toggles.ESPHealthbar and Toggles.ESPHealthbar.Value
     local hbPos = Options.ESPHealthbarPos and Options.ESPHealthbarPos.Value or 'Top'
     local hbC   = Options.ESPHealthbarColor  and Options.ESPHealthbarColor.Value  or Color3.fromRGB(12, 255, 93)
@@ -442,20 +468,20 @@ local function updatePreview(win, refs, fakeData, dt)
             local targetSize
             if pos == 'Top' then
                 hb.frame.AnchorPoint = Vector2.new(0, 1)
-                hb.frame.Position = UDim2.new(bx, 0, by, -5)
-                targetSize = UDim2.new(bw * hpFrac, 0, 0, 1); hb.grad.Rotation = 0
+                hb.frame.Position = UDim2.new(bx, -1, by, -5)
+                targetSize = UDim2.new(bw * hpFrac, 2 * hpFrac, 0, 1); hb.grad.Rotation = 0
             elseif pos == 'Down' then
                 hb.frame.AnchorPoint = Vector2.new(0, 0)
-                hb.frame.Position = UDim2.new(bx, 0, by + bh, 5)
-                targetSize = UDim2.new(bw * hpFrac, 0, 0, 1); hb.grad.Rotation = 0
+                hb.frame.Position = UDim2.new(bx, -1, by + bh, 5)
+                targetSize = UDim2.new(bw * hpFrac, 2 * hpFrac, 0, 1); hb.grad.Rotation = 0
             elseif pos == 'Right' then
                 hb.frame.AnchorPoint = Vector2.new(0, 1)
-                hb.frame.Position = UDim2.new(bx + bw, 5, by + bh, 0)
-                targetSize = UDim2.new(0, 1, bh * hpFrac, 0); hb.grad.Rotation = 90
+                hb.frame.Position = UDim2.new(bx + bw, 5, by + bh, 1)
+                targetSize = UDim2.new(0, 1, bh * hpFrac, 2 * hpFrac); hb.grad.Rotation = 90
             elseif pos == 'Left' then
                 hb.frame.AnchorPoint = Vector2.new(1, 1)
-                hb.frame.Position = UDim2.new(bx, -5, by + bh, 0)
-                targetSize = UDim2.new(0, 1, bh * hpFrac, 0); hb.grad.Rotation = 90
+                hb.frame.Position = UDim2.new(bx, -5, by + bh, 1)
+                targetSize = UDim2.new(0, 1, bh * hpFrac, 2 * hpFrac); hb.grad.Rotation = 90
             end
             if refs._hbTween then pcall(refs._hbTween.Cancel, refs._hbTween) end
             refs._hbTween = TweenService:Create(hb.frame, HB_TWEEN_INFO, { Size = targetSize })
