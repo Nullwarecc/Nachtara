@@ -4575,14 +4575,14 @@ function Library:CreateWindow(...)
 
     Library:MakeDraggable(Outer, 26);
 
-    -- Outer glow effect (accent-colored shadow around window) — animated
+    -- Outer glow effect (white animated shadow around window)
     -- Same technique as Nullwaremain FOV: UIGradient.Rotation driven by
     -- tick() * speed each RenderStepped, giving a smooth colour-cycle sweep.
     local WindowGlowFrames = {};
     local WindowGlowGradients = {};
     for i = 1, 6 do
         local GlowFrame = Library:Create('Frame', {
-            BackgroundColor3 = Library.AccentColor;
+            BackgroundColor3 = Color3.new(1, 1, 1);
             BackgroundTransparency = 0.5 + i * 0.08;
             BorderSizePixel = 0;
             Position = UDim2.new(0, -i, 0, -i);
@@ -4591,17 +4591,14 @@ function Library:CreateWindow(...)
             Parent = Outer;
         });
 
-        -- UIGradient that sweeps two colours around the glow frame.
-        -- Color is rebuilt each frame from AccentColor + a darker variant.
+        -- UIGradient that sweeps white → dim white → white each frame.
         local GlowGradient = Library:Create('UIGradient', {
-            Color = ColorSequence.new(Library.AccentColor, Library.AccentColor);
+            Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(1, 1, 1));
             Rotation = 0;
             Parent = GlowFrame;
         });
 
-        Library:AddToRegistry(GlowFrame, {
-            BackgroundColor3 = 'AccentColor';
-        });
+        -- No AccentColor registry binding — glow is always white.
 
         WindowGlowFrames[i]    = GlowFrame;
         WindowGlowGradients[i] = GlowGradient;
@@ -4612,16 +4609,12 @@ function Library:CreateWindow(...)
     -- Speed: 30 degrees/sec  (≈ one full sweep every 12 s).
     local GLOW_ANIM_SPEED = 30;
     table.insert(Library.Signals, RunService.RenderStepped:Connect(function()
-        local accent = Library.AccentColor;
-        local dark   = Color3.new(
-            math.clamp(accent.R * 1, 1, 1),
-            math.clamp(accent.G * 1, 1, 1),
-            math.clamp(accent.B * 1, 1, 1)
-        );
+        local white = Color3.new(1, 1, 1);
+        local dimWhite = Color3.new(0.35, 0.35, 0.35);
         local cs = ColorSequence.new({
-            ColorSequenceKeypoint.new(0,   accent);
-            ColorSequenceKeypoint.new(1, dark);
-            ColorSequenceKeypoint.new(1,   accent);
+            ColorSequenceKeypoint.new(0,   white);
+            ColorSequenceKeypoint.new(0.5, dimWhite);
+            ColorSequenceKeypoint.new(1,   white);
         });
         local rot = (tick() * GLOW_ANIM_SPEED) % 360;
         for i = 1, #WindowGlowGradients do
@@ -5548,7 +5541,107 @@ function Library:CreateWindow(...)
             end;
         end;
 
-     
+        if Toggled then
+            -- A bit scuffed, but if we're going from not toggled -> toggled we want to show the frame immediately so that the fade is visible.
+            Outer.Visible = true;
+
+            -- Menu crosshair: 4 Frames forming a plus around the mouse. Uses a
+            -- dedicated ScreenGui parented to CoreGui so it ignores the topbar
+            -- inset and sits above the main menu. Replaces a Drawing-based
+            -- implementation — Drawing isn't UI and isn't available on every
+            -- executor.
+            task.spawn(function()
+                local State = InputService.MouseIconEnabled;
+                local S, Gap = 4, 1;
+
+                local cursorGui = Instance.new('ScreenGui');
+                ProtectGui(cursorGui);
+                cursorGui.Name = 'SanyuiCursor';
+                cursorGui.IgnoreGuiInset = true;
+                cursorGui.ResetOnSpawn = false;
+                cursorGui.DisplayOrder = 100000;
+                cursorGui.Parent = CoreGui;
+
+                local function mkArm()
+                    local f = Instance.new('Frame');
+                    f.BorderSizePixel = 0;
+                    f.BackgroundColor3 = Color3.new(1, 1, 1);
+                    f.AnchorPoint = Vector2.new(0.5, 0.5);
+                    f.Parent = cursorGui;
+                    return f;
+                end;
+                local armL, armR, armT, armB = mkArm(), mkArm(), mkArm(), mkArm();
+
+                -- Accent-colored trail: 8 pooled dots that age out into transparency.
+                -- Pool avoids per-frame allocation; write-index rotates round-robin.
+                local TRAIL_N = 8;
+                local trail = table.create(TRAIL_N);
+                for i = 1, TRAIL_N do
+                    local d = Instance.new('Frame');
+                    d.BorderSizePixel = 0;
+                    d.AnchorPoint = Vector2.new(0.5, 0.5);
+                    d.BackgroundColor3 = Library.AccentColor;
+                    d.BackgroundTransparency = 1;
+                    d.Size = UDim2.fromOffset(3, 3);
+                    d.Parent = cursorGui;
+                    local c = Instance.new('UICorner');
+                    c.CornerRadius = UDim.new(1, 0);
+                    c.Parent = d;
+                    trail[i] = { frame = d, birth = -1 };
+                end;
+                local trailIdx = 1;
+                local TRAIL_LIFE = 0.35;
+
+                local lastX, lastY = -1, -1;
+                while Toggled and ScreenGui.Parent do
+                    InputService.MouseIconEnabled = false;
+                    local mPos = InputService:GetMouseLocation();
+                    local X, Y = mPos.X, mPos.Y;
+
+                    armL.Size     = UDim2.fromOffset(S - Gap, 1);
+                    armL.Position = UDim2.fromOffset(X - Gap - (S - Gap) / 2, Y);
+                    armR.Size     = UDim2.fromOffset(S - Gap, 1);
+                    armR.Position = UDim2.fromOffset(X + Gap + (S - Gap) / 2, Y);
+                    armT.Size     = UDim2.fromOffset(1, S - Gap);
+                    armT.Position = UDim2.fromOffset(X, Y - Gap - (S - Gap) / 2);
+                    armB.Size     = UDim2.fromOffset(1, S - Gap);
+                    armB.Position = UDim2.fromOffset(X, Y + Gap + (S - Gap) / 2);
+
+                    -- Spawn a trail dot only when the cursor actually moved.
+                    if X ~= lastX or Y ~= lastY then
+                        local slot = trail[trailIdx];
+                        slot.frame.Position = UDim2.fromOffset(X, Y);
+                        slot.frame.BackgroundColor3 = Library.AccentColor;
+                        slot.birth = tick();
+                        trailIdx = trailIdx % TRAIL_N + 1;
+                        lastX, lastY = X, Y;
+                    end;
+
+                    local now = tick();
+                    for i = 1, TRAIL_N do
+                        local slot = trail[i];
+                        if slot.birth > 0 then
+                            local age = (now - slot.birth) / TRAIL_LIFE;
+                            if age >= 1 then
+                                slot.frame.BackgroundTransparency = 1;
+                                slot.birth = -1;
+                            else
+                                slot.frame.BackgroundTransparency = age;
+                            end;
+                        end;
+                    end;
+
+                    RenderStepped:Wait();
+                end;
+
+                for i = 1, TRAIL_N do
+                    pcall(trail[i].frame.Destroy, trail[i].frame);
+                end;
+
+                InputService.MouseIconEnabled = State;
+                pcall(cursorGui.Destroy, cursorGui);
+            end);
+        end;
 
         if Toggled then
             -- Open: fade in on the CanvasGroup that holds the menu content.
