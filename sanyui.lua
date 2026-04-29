@@ -4614,9 +4614,9 @@ function Library:CreateWindow(...)
     table.insert(Library.Signals, RunService.RenderStepped:Connect(function()
         local accent = Library.AccentColor;
         local dark   = Color3.new(
-            math.clamp(accent.R * 0.35, 0, 1),
-            math.clamp(accent.G * 0.35, 0, 1),
-            math.clamp(accent.B * 0.35, 0, 1)
+            math.clamp(accent.R * 1, 1, 1),
+            math.clamp(accent.G * 1, 1, 1),
+            math.clamp(accent.B * 1, 1, 1)
         );
         local cs = ColorSequence.new({
             ColorSequenceKeypoint.new(0,   accent);
