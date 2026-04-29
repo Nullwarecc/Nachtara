@@ -4620,7 +4620,7 @@ function Library:CreateWindow(...)
         );
         local cs = ColorSequence.new({
             ColorSequenceKeypoint.new(0,   accent);
-            ColorSequenceKeypoint.new(0.5, dark);
+            ColorSequenceKeypoint.new(1, dark);
             ColorSequenceKeypoint.new(1,   accent);
         });
         local rot = (tick() * GLOW_ANIM_SPEED) % 360;
