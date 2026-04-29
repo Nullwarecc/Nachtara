@@ -4575,7 +4575,11 @@ function Library:CreateWindow(...)
 
     Library:MakeDraggable(Outer, 26);
 
-    -- Outer glow effect (accent-colored shadow around window)
+    -- Outer glow effect (accent-colored shadow around window) — animated
+    -- Same technique as Nullwaremain FOV: UIGradient.Rotation driven by
+    -- tick() * speed each RenderStepped, giving a smooth colour-cycle sweep.
+    local WindowGlowFrames = {};
+    local WindowGlowGradients = {};
     for i = 1, 6 do
         local GlowFrame = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
@@ -4587,10 +4591,48 @@ function Library:CreateWindow(...)
             Parent = Outer;
         });
 
+        -- UIGradient that sweeps two colours around the glow frame.
+        -- Color is rebuilt each frame from AccentColor + a darker variant.
+        local GlowGradient = Library:Create('UIGradient', {
+            Color = ColorSequence.new(Library.AccentColor, Library.AccentColor);
+            Rotation = 0;
+            Parent = GlowFrame;
+        });
+
         Library:AddToRegistry(GlowFrame, {
             BackgroundColor3 = 'AccentColor';
         });
+
+        WindowGlowFrames[i]    = GlowFrame;
+        WindowGlowGradients[i] = GlowGradient;
     end;
+
+    -- Animate the glow: rotate the gradient each frame, exactly like the
+    -- Nullwaremain FOV circle (fovGradient.Rotation = (tick() * speed) % 360).
+    -- Speed: 30 degrees/sec  (≈ one full sweep every 12 s).
+    local GLOW_ANIM_SPEED = 30;
+    table.insert(Library.Signals, RunService.RenderStepped:Connect(function()
+        local accent = Library.AccentColor;
+        local dark   = Color3.new(
+            math.clamp(accent.R * 0.35, 0, 1),
+            math.clamp(accent.G * 0.35, 0, 1),
+            math.clamp(accent.B * 0.35, 0, 1)
+        );
+        local cs = ColorSequence.new({
+            ColorSequenceKeypoint.new(0,   accent);
+            ColorSequenceKeypoint.new(0.5, dark);
+            ColorSequenceKeypoint.new(1,   accent);
+        });
+        local rot = (tick() * GLOW_ANIM_SPEED) % 360;
+        for i = 1, #WindowGlowGradients do
+            local g = WindowGlowGradients[i];
+            if g and g.Parent then
+                g.Color    = cs;
+                -- offset each layer slightly so they don't all overlap perfectly
+                g.Rotation = (rot + i * 15) % 360;
+            end;
+        end;
+    end));
 
     -- Fade layer — holds the actual menu content. Single tween on
     -- GroupTransparency fades ~1500 descendants atomically instead of
