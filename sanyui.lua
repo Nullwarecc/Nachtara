@@ -4575,14 +4575,14 @@ function Library:CreateWindow(...)
 
     Library:MakeDraggable(Outer, 26);
 
-    -- Outer glow effect (white animated shadow around window)
+    -- Outer glow effect (accent-colored shadow around window) — animated
     -- Same technique as Nullwaremain FOV: UIGradient.Rotation driven by
     -- tick() * speed each RenderStepped, giving a smooth colour-cycle sweep.
     local WindowGlowFrames = {};
     local WindowGlowGradients = {};
     for i = 1, 6 do
         local GlowFrame = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(1, 1, 1);
+            BackgroundColor3 = Library.AccentColor;
             BackgroundTransparency = 0.5 + i * 0.08;
             BorderSizePixel = 0;
             Position = UDim2.new(0, -i, 0, -i);
@@ -4591,14 +4591,17 @@ function Library:CreateWindow(...)
             Parent = Outer;
         });
 
-        -- UIGradient that sweeps white → dim white → white each frame.
+        -- UIGradient that sweeps two colours around the glow frame.
+        -- Color is rebuilt each frame from AccentColor + a darker variant.
         local GlowGradient = Library:Create('UIGradient', {
-            Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(1, 1, 1));
+            Color = ColorSequence.new(Library.AccentColor, Library.AccentColor);
             Rotation = 0;
             Parent = GlowFrame;
         });
 
-        -- No AccentColor registry binding — glow is always white.
+        Library:AddToRegistry(GlowFrame, {
+            BackgroundColor3 = 'AccentColor';
+        });
 
         WindowGlowFrames[i]    = GlowFrame;
         WindowGlowGradients[i] = GlowGradient;
@@ -4609,12 +4612,16 @@ function Library:CreateWindow(...)
     -- Speed: 30 degrees/sec  (≈ one full sweep every 12 s).
     local GLOW_ANIM_SPEED = 30;
     table.insert(Library.Signals, RunService.RenderStepped:Connect(function()
-        local white = Color3.new(1, 1, 1);
-        local dimWhite = Color3.new(0.35, 0.35, 0.35);
+        local accent = Library.AccentColor;
+        local dark   = Color3.new(
+            math.clamp(accent.R * 0.35, 0, 1),
+            math.clamp(accent.G * 0.35, 0, 1),
+            math.clamp(accent.B * 0.35, 0, 1)
+        );
         local cs = ColorSequence.new({
-            ColorSequenceKeypoint.new(0,   white);
-            ColorSequenceKeypoint.new(0.5, dimWhite);
-            ColorSequenceKeypoint.new(1,   white);
+            ColorSequenceKeypoint.new(0,   accent);
+            ColorSequenceKeypoint.new(0.5, dark);
+            ColorSequenceKeypoint.new(1,   accent);
         });
         local rot = (tick() * GLOW_ANIM_SPEED) % 360;
         for i = 1, #WindowGlowGradients do
